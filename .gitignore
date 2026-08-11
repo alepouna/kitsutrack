@@ -1,0 +1,34 @@
+# Rust build output
+/target/
+
+# Apple/Xcode generated output
+DerivedData/
+build/
+*.ipa
+*.xcarchive
+*.dSYM
+/ios/*.xcodeproj/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# Packaged applications and downloaded third-party runtimes
+/windows/vendor/
+/windows/dist/
+/ios/dist/
+dist/
+*.exe
+*.dll
+*.msi
+*.zip
+*.tar.gz
+
+# Editor and operating-system files
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Local CodeGraph index and configuration
+/.codegraph/

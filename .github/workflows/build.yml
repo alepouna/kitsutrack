@@ -1,0 +1,19 @@
+name: build
+on: [push, pull_request]
+jobs:
+  rust:
+    strategy:
+      matrix: { os: [macos-latest, windows-latest] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+      - run: cargo build --workspace --release
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: cd ios && xcodegen generate
+      - run: xcodebuild -project ios/KitsuTrack.xcodeproj -scheme KitsuTrack -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
