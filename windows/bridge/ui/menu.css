@@ -1,0 +1,12 @@
+:root { color-scheme: dark; font-family: "Segoe UI Variable", "Segoe UI", sans-serif; background: transparent; color: #f5f0e8; }
+body { margin: 0; padding: 6px; background: transparent; }
+main { background: #241b19; border: 1px solid #5a4236; border-radius: 12px; box-shadow: 0 12px 32px #0009; overflow: hidden; padding: 8px; }
+.heading { display: flex; align-items: center; gap: 10px; padding: 8px 10px 10px; }
+img { width: 32px; height: 32px; object-fit: contain; }
+h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: .01em; }
+p { margin: 3px 0 0; color: #f7b46c; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 230px; }
+.rule { height: 1px; background: #523b31; margin: 5px 2px; }
+button { appearance: none; width: 100%; border: 0; border-radius: 7px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 13px; padding: 8px 10px; text-align: left; }
+button:hover, button:focus-visible { background: #51382d; outline: none; }
+button.quit { color: #ffb3a4; } button.quit:hover { background: #5a2c27; }
+.hidden { display: none; } #update { color: #f7b46c; }

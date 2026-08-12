@@ -9,6 +9,7 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\KitsuTrack
+DisableDirPage=no
 DefaultGroupName={#AppName}
 OutputDir=dist
 OutputBaseFilename=KitsuTrack-Windows-Setup-x64

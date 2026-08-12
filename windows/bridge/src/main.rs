@@ -16,12 +16,12 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
     path::BaseDirectory,
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_positioner::{Position, WindowExt};
 
 const REPOSITORY_URL: &str = "https://github.com/alepouna/kitsutrack";
 const ISSUE_URL: &str = "https://github.com/alepouna/kitsutrack/issues/new/choose";
@@ -77,15 +77,11 @@ struct Logger {
     settings: String,
 }
 struct StatusItem {
-    item: MenuItem<tauri::Wry>,
     text: Mutex<String>,
 }
 struct UpdateItem {
-    item: MenuItem<tauri::Wry>,
     url: Mutex<Option<String>>,
-    shown: Mutex<bool>,
 }
-struct TrayMenu(Menu<tauri::Wry>);
 struct ChildProcess(Mutex<Option<Child>>);
 
 #[derive(Deserialize)]
@@ -98,8 +94,24 @@ fn main() {
     let args = Args::parse();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_positioner::init())
         .setup(move |app| Ok(setup(app.handle().clone(), args.clone())?))
-        .invoke_handler(tauri::generate_handler![logs, export_logs])
+        .invoke_handler(tauri::generate_handler![
+            logs,
+            export_logs,
+            menu_state,
+            open_logs,
+            open_about,
+            report_feedback,
+            check_for_updates,
+            open_update_command,
+            quit,
+        ])
+        .on_window_event(|window, event| {
+            if window.label() == "menu" && matches!(event, WindowEvent::Focused(false)) {
+                let _ = window.hide();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("run KitsuTrack Bridge");
 }
@@ -109,65 +121,23 @@ fn setup(app: AppHandle, args: Args) -> Result<()> {
     app.manage(logger.clone());
     app.manage(ChildProcess(Mutex::new(None)));
 
-    let status = MenuItem::with_id(&app, "status", "Starting…", false, None::<&str>)?;
-    let logs = MenuItem::with_id(&app, "logs", "Logs", true, None::<&str>)?;
-    let check_updates_item = MenuItem::with_id(
-        &app,
-        "check-updates",
-        "Check for updates",
-        true,
-        None::<&str>,
-    )?;
-    let update = MenuItem::with_id(&app, "update", "", false, None::<&str>)?;
-    let about = MenuItem::with_id(&app, "about", "About KitsuTrack", true, None::<&str>)?;
-    let feedback = MenuItem::with_id(
-        &app,
-        "feedback",
-        "Report a bug / suggest a feature",
-        true,
-        None::<&str>,
-    )?;
-    let quit = MenuItem::with_id(&app, "quit", "Quit", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(&app)?;
-    let menu = Menu::with_items(
-        &app,
-        &[
-            &status,
-            &separator,
-            &logs,
-            &check_updates_item,
-            &about,
-            &feedback,
-            &separator,
-            &quit,
-        ],
-    )?;
     app.manage(StatusItem {
-        item: status,
         text: Mutex::new("Starting…".into()),
     });
     app.manage(UpdateItem {
-        item: update,
         url: Mutex::new(None),
-        shown: Mutex::new(false),
     });
-    app.manage(TrayMenu(menu.clone()));
     TrayIconBuilder::new()
-        .menu(&menu)
-        .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "logs" => show_logs(app),
-            "check-updates" => check_updates(app.clone(), true),
-            "update" => open_update(app),
-            "about" => show_about(app),
-            "feedback" => {
-                let _ = open::that(ISSUE_URL);
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left | MouseButton::Right,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
+                show_menu(tray.app_handle());
             }
-            "quit" => {
-                stop_helper(app);
-                app.exit(0);
-            }
-            _ => {}
         })
         .build(&app)?;
 
@@ -312,12 +282,14 @@ fn start_helper(app: &AppHandle, args: &Args) {
     } else {
         &["4243", "4243"]
     };
-    match Command::new(&executable)
+    let mut command = Command::new(&executable);
+    command
         .args(arguments)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    match command.spawn() {
         Ok(mut child) => {
             if let Some(stdout) = child.stdout.take() {
                 relay_helper_output(app.clone(), stdout, "USB helper");
@@ -377,6 +349,34 @@ fn show_logs(app: &AppHandle) {
         .build();
 }
 
+fn show_menu(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("menu") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.move_window_constrained(Position::TrayCenter);
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "menu", WebviewUrl::App("menu.html".into()))
+        .title("KitsuTrack Bridge")
+        .inner_size(320.0, 310.0)
+        .resizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .build()
+        .and_then(|window| {
+            window.move_window_constrained(Position::TrayCenter)?;
+            window.show()?;
+            window.set_focus()
+        });
+}
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 fn show_about(app: &AppHandle) {
     app.dialog()
         .message(format!(
@@ -393,16 +393,8 @@ fn check_updates(app: AppHandle, manual: bool) {
             let _ = fs::write(update_check_path(&app), unix_millis().to_string());
             if is_newer_release(&release.tag_name) {
                 let update = app.state::<UpdateItem>();
-                let _ = update
-                    .item
-                    .set_text(format!("Update available: {}", release.tag_name));
-                let _ = update.item.set_enabled(true);
                 *update.url.lock().expect("update lock") = Some(release.html_url);
-                let mut shown = update.shown.lock().expect("update shown lock");
-                if !*shown {
-                    let _ = app.state::<TrayMenu>().0.append(&update.item);
-                    *shown = true;
-                }
+                let _ = app.emit("menu-state", menu_state(app.clone()));
                 log(
                     &app,
                     Level::Info,
@@ -476,6 +468,61 @@ fn open_update(app: &AppHandle) {
     if let Some(url) = update.url.lock().expect("update lock").as_deref() {
         let _ = open::that(url);
     }
+}
+
+#[derive(Clone, Serialize)]
+struct MenuState {
+    status: String,
+    update_available: bool,
+}
+
+#[tauri::command]
+fn menu_state(app: AppHandle) -> MenuState {
+    MenuState {
+        status: app
+            .state::<StatusItem>()
+            .text
+            .lock()
+            .expect("status lock")
+            .clone(),
+        update_available: app
+            .state::<UpdateItem>()
+            .url
+            .lock()
+            .expect("update lock")
+            .is_some(),
+    }
+}
+
+#[tauri::command]
+fn open_logs(app: AppHandle) {
+    show_logs(&app);
+}
+
+#[tauri::command]
+fn open_about(app: AppHandle) {
+    show_about(&app);
+}
+
+#[tauri::command]
+fn report_feedback() {
+    let _ = open::that(ISSUE_URL);
+}
+
+#[tauri::command]
+fn check_for_updates(app: AppHandle) {
+    check_updates(app, true);
+}
+
+#[tauri::command]
+fn open_update_command(app: AppHandle) {
+    open_update(&app);
+}
+
+#[tauri::command]
+fn quit(app: AppHandle) {
+    stop_helper(&app);
+    app.exit(0);
 }
 
 fn show_temporary_status(app: &AppHandle, text: impl Into<String>) {
@@ -614,7 +661,7 @@ fn export_text(logger: &Logger) -> String {
 fn set_status(app: &AppHandle, status: &str) {
     let item = app.state::<StatusItem>();
     *item.text.lock().expect("status lock") = status.into();
-    let _ = item.item.set_text(status);
+    let _ = app.emit("menu-state", menu_state(app.clone()));
 }
 fn unix_millis() -> u128 {
     SystemTime::now()

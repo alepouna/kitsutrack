@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>KitsuTrack Bridge</title>
+    <link rel="stylesheet" href="menu.css">
+  </head>
+  <body>
+    <main>
+      <div class="heading">
+        <img src="icon.png" alt="KitsuTrack">
+        <div><h1>KitsuTrack Bridge</h1><p id="status">Starting…</p></div>
+      </div>
+      <div class="rule"></div>
+      <button data-command="open_logs">Logs</button>
+      <button data-command="check_for_updates">Check for updates</button>
+      <button id="update" class="hidden" data-command="open_update_command">Update available</button>
+      <button data-command="open_about">About KitsuTrack</button>
+      <button data-command="report_feedback">Report a bug / suggest a feature</button>
+      <div class="rule"></div>
+      <button class="quit" data-command="quit">Quit</button>
+    </main>
+    <script src="menu.js"></script>
+  </body>
+</html>
