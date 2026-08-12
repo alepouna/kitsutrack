@@ -14,8 +14,8 @@
     "active": true,
     "targets": "nsis",
     "icon": [
-      "icons/icon.ico",
-      "icons/icon.png"
+      "../../shared/assets/kitsutrack/icon.ico",
+      "../../shared/assets/kitsutrack/icon-1024.png"
     ]
   }
 }
