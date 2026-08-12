@@ -16,23 +16,28 @@ jobs:
       - run: cd ios && xcodegen generate
       - name: Build unsigned device app
         run: |
+          VERSION_SETTING=()
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION_SETTING=("MARKETING_VERSION=$VERSION")
+          fi
           xcodebuild -project ios/KitsuTrack.xcodeproj -scheme KitsuTrack \
             -sdk iphoneos -destination 'generic/platform=iOS' \
             -configuration Release -derivedDataPath build/ios \
+            "${VERSION_SETTING[@]}" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
       - name: Package IPA
         run: |
           mkdir -p build/ipa/Payload
           cp -R build/ios/Build/Products/Release-iphoneos/KitsuTrack.app build/ipa/Payload/
-          cd build/ipa && zip -qry ../KitsuTrack-unsigned.ipa Payload
+          cd build/ipa && zip -qry ../KitsuTrack-App-iOS-unsigned.ipa Payload
       - uses: actions/upload-artifact@v4
         with:
-          name: KitsuTrack-iOS
-          path: build/KitsuTrack-unsigned.ipa
+          name: KitsuTrack-App-iOS
+          path: build/KitsuTrack-App-iOS-unsigned.ipa
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: build/KitsuTrack-unsigned.ipa
-
+          files: build/KitsuTrack-App-iOS-unsigned.ipa

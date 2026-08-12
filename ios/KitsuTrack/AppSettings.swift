@@ -5,7 +5,7 @@ enum TransportMode: String, CaseIterable, Identifiable {
     case network
 
     var id: Self { self }
-    var title: String { self == .usb ? "USB Mode (Bridge)" : "Network Mode" }
+    var title: String { self == .usb ? "USB Bridge" : "Network (OpenTrack UDP)" }
 }
 
 final class AppSettings: ObservableObject {
@@ -19,7 +19,7 @@ final class AppSettings: ObservableObject {
         static let keepScreenOn = "keepScreenOn"
     }
 
-    private let defaults: UserDefaults
+    let defaults: UserDefaults
 
     @Published var transportMode: TransportMode { didSet { defaults.set(transportMode.rawValue, forKey: Key.transportMode) } }
     @Published var networkHost: String { didSet { defaults.set(networkHost, forKey: Key.networkHost) } }
@@ -40,4 +40,3 @@ final class AppSettings: ObservableObject {
         keepScreenOn = defaults.object(forKey: Key.keepScreenOn) as? Bool ?? true
     }
 }
-

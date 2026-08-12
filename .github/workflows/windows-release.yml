@@ -23,21 +23,25 @@ jobs:
         run: .\windows\package.ps1 -SkipBuild
       - name: Create portable zip
         shell: pwsh
-        run: Compress-Archive -Path windows\dist\KitsuTrack\* -DestinationPath windows\dist\KitsuTrack-Windows-Portable-x64.zip
+        run: Compress-Archive -Path windows\dist\KitsuTrack\* -DestinationPath windows\dist\KitsuTrack-Bridge-Windows-Portable-x64.zip
       - name: Build installer
         shell: pwsh
         run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" windows\installer.iss'
+      - name: Name bridge packages
+        shell: pwsh
+        run: |
+          Move-Item windows\dist\KitsuTrack-Windows-Setup-x64.exe windows\dist\KitsuTrack-Bridge-Windows-Setup-x64.exe
       - uses: actions/upload-artifact@v4
         with:
-          name: KitsuTrack-Windows
+          name: KitsuTrack-Bridge-Windows
           path: |
-            windows/dist/KitsuTrack-Windows-Portable-x64.zip
-            windows/dist/KitsuTrack-Windows-Setup-x64.exe
+            windows/dist/KitsuTrack-Bridge-Windows-Portable-x64.zip
+            windows/dist/KitsuTrack-Bridge-Windows-Setup-x64.exe
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            windows/dist/KitsuTrack-Windows-Portable-x64.zip
-            windows/dist/KitsuTrack-Windows-Setup-x64.exe
+            windows/dist/KitsuTrack-Bridge-Windows-Portable-x64.zip
+            windows/dist/KitsuTrack-Bridge-Windows-Setup-x64.exe

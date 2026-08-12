@@ -1,0 +1,21 @@
+name: Deploy diagnostics viewer
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths: ['tools/diagnostics-viewer/**']
+permissions: { contents: read, pages: write, id-token: write }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: tools/diagnostics-viewer } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: tools/diagnostics-viewer/package-lock.json }
+      - run: npm ci
+      - run: npm run build
+        env: { VITE_BASE: '/${{ github.event.repository.name }}/' }
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: tools/diagnostics-viewer/dist }
+      - uses: actions/deploy-pages@v4

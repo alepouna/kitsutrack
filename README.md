@@ -21,6 +21,7 @@ If something is not working, see [Troubleshooting](docs/troubleshooting.md).
 - [Build the iOS app](docs/development/build-ios.md)
 - [Build the Windows bridge](docs/development/build-windows.md)
 - [iOS development](docs/development/ios.md)
+- [iOS simulator and tracker simulation](docs/development/ios.md#iphone-simulator-ui-workflow)
 - [Windows bridge development](docs/development/windows.md)
 
 ## License

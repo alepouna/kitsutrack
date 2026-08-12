@@ -32,3 +32,28 @@ Use inverts on OpenTrack options.
 
 This is expected. iOS does not allow continuous TrueDepth capture in the background.
 Keep the app open (with the keep open option)! Phone calls, full screen notifications and sometimes PiP may cancel tracking, not much I can do :( 
+
+## Review diagnostics recordings
+
+Diagnostics recordings are local artifacts and should be handled like any
+other private tracking data. Open the diagnostics viewer locally; it does not
+need a network connection or an upload service:
+
+```bash
+cd tools/diagnostics-viewer
+npm install
+npm run dev
+```
+
+Open the local URL printed by Vite and load the `.ktrack` file exported by the
+app. Use the synchronized timeline, pose charts, and 3D view to compare
+tracking state, loss/recovery, and jumps. If the viewer is being served from a
+production build instead, run `npm run build` followed by `npm run preview`.
+Do not paste recordings into public issue comments unless they have been
+reviewed for sensitive timing or movement information.
+
+To isolate an iPhone transmission problem from downstream drift, first run
+the synthetic source described in [iOS development](development/ios.md). If
+the simulator scenarios look correct in the viewer and OpenTrack, repeat with
+the physical iPhone. A failure only with the phone points upstream to the
+camera/session or transport; a failure with both sources points downstream.
