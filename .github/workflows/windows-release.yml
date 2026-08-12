@@ -13,11 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Test and build
+      - uses: Swatinem/rust-cache@v2
+      - name: Test and build the Tauri bridge
         shell: pwsh
         run: |
-          cargo test --workspace
+          cargo test --workspace --release
           cargo build --release -p kitsutrack-bridge
+          if (-not (Test-Path target\release\kitsutrack-bridge.exe)) { throw "Tauri bridge executable was not produced" }
       - name: Assemble portable package
         shell: pwsh
         run: .\windows\package.ps1 -SkipBuild
