@@ -13,7 +13,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -79,6 +79,9 @@ struct Logger {
 struct StatusItem {
     text: Mutex<String>,
 }
+struct BridgeStats {
+    tracking_rate: Mutex<Option<u32>>,
+}
 struct UpdateItem {
     url: Mutex<Option<String>>,
 }
@@ -122,7 +125,10 @@ fn setup(app: AppHandle, args: Args) -> Result<()> {
     app.manage(ChildProcess(Mutex::new(None)));
 
     app.manage(StatusItem {
-        text: Mutex::new("Starting…".into()),
+        text: Mutex::new("Disconnected".into()),
+    });
+    app.manage(BridgeStats {
+        tracking_rate: Mutex::new(None),
     });
     app.manage(UpdateItem {
         url: Mutex::new(None),
@@ -158,13 +164,17 @@ fn setup(app: AppHandle, args: Args) -> Result<()> {
 
 fn run_bridge(app: AppHandle, args: Args) {
     if let Err(error) = verify_windows_usbmux(&args) {
-        set_status(&app, "USB helper unavailable — view Logs");
+        set_status(&app, "Disconnected");
         log(&app, Level::Error, format!("{error:#}"));
         return;
     }
     loop {
         start_helper(&app, &args);
-        set_status(&app, "Connecting to iPhone via USB…");
+        set_status(&app, "Disconnected");
+        *app.state::<BridgeStats>()
+            .tracking_rate
+            .lock()
+            .expect("tracking rate lock") = None;
         log(
             &app,
             Level::Info,
@@ -174,7 +184,11 @@ fn run_bridge(app: AppHandle, args: Args) {
             Ok(()) => log(&app, Level::Warning, "Tracker disconnected"),
             Err(error) => log(&app, Level::Warning, format!("Connection error: {error:#}")),
         }
-        set_status(&app, "Connection error — view Logs");
+        set_status(&app, "Disconnected");
+        *app.state::<BridgeStats>()
+            .tracking_rate
+            .lock()
+            .expect("tracking rate lock") = None;
         thread::sleep(Duration::from_secs(1));
     }
 }
@@ -184,7 +198,7 @@ fn forward(app: &AppHandle, args: &Args) -> Result<()> {
     let mut tcp = TcpStream::connect(&args.source).context("connect to USB forwarding helper")?;
     tcp.set_read_timeout(Some(Duration::from_millis(args.stale_ms)))?;
     tcp.set_nodelay(true)?;
-    set_status(app, "Waiting for tracking data");
+    set_status(app, "Connected / Waiting for Tracking Data");
     log(
         app,
         Level::Info,
@@ -193,6 +207,8 @@ fn forward(app: &AppHandle, args: &Args) -> Result<()> {
     let mut wire = [0_u8; PACKET_SIZE];
     let mut last_sequence = None;
     let mut forwarding = false;
+    let mut rate_started = Instant::now();
+    let mut rate_count = 0_u32;
     loop {
         tcp.read_exact(&mut wire)
             .context("no tracking packets received")?;
@@ -216,12 +232,22 @@ fn forward(app: &AppHandle, args: &Args) -> Result<()> {
         }
         if !forwarding {
             forwarding = true;
-            set_status(app, "Connected to iPhone via USB");
+            set_status(app, "Connected / Tracking");
             log(
                 app,
                 Level::Info,
                 format!("Forwarding to OpenTrack at {}", args.opentrack),
             );
+        }
+        rate_count += 1;
+        if rate_started.elapsed() >= Duration::from_secs(1) {
+            *app.state::<BridgeStats>()
+                .tracking_rate
+                .lock()
+                .expect("tracking rate lock") = Some(rate_count);
+            let _ = app.emit("menu-state", menu_state(app.clone()));
+            rate_started = Instant::now();
+            rate_count = 0;
         }
         let angles = quaternion_to_degrees(packet.rotation);
         let mut values = [
@@ -358,7 +384,7 @@ fn show_menu(app: &AppHandle) {
     }
     let _ = WebviewWindowBuilder::new(app, "menu", WebviewUrl::App("menu.html".into()))
         .title("KitsuTrack Bridge")
-        .inner_size(320.0, 310.0)
+        .inner_size(340.0, 345.0)
         .resizable(false)
         .decorations(false)
         .always_on_top(true)
@@ -473,6 +499,8 @@ fn open_update(app: &AppHandle) {
 #[derive(Clone, Serialize)]
 struct MenuState {
     status: String,
+    iphone: String,
+    tracking_rate: Option<u32>,
     update_available: bool,
 }
 
@@ -485,6 +513,12 @@ fn menu_state(app: AppHandle) -> MenuState {
             .lock()
             .expect("status lock")
             .clone(),
+        iphone: "iPhone connected".into(),
+        tracking_rate: *app
+            .state::<BridgeStats>()
+            .tracking_rate
+            .lock()
+            .expect("tracking rate lock"),
         update_available: app
             .state::<UpdateItem>()
             .url
