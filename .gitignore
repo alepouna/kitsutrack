@@ -1,5 +1,6 @@
 # Rust build output
 /target/
+/windows/bridge/gen/
 
 # Apple/Xcode generated output
 DerivedData/
