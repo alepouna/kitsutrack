@@ -53,3 +53,15 @@ recovery handling, not to replace on-device ARKit testing.
 
 The physical iPhone remains required to validate TrueDepth, centering,
 foreground behavior, camera preview, signing, and USB transport.
+
+## Landscape mounting
+
+KitsuTrack uses ARKit camera alignment, whose axes use the phone's native
+sensor basis rather than the SwiftUI interface orientation. The pipeline then
+centers every measurement with `inverse(centerPose) * currentPose`, so changing
+the app interface between portrait and landscape does not remap the pose sent
+to OpenTrack.
+
+Mount the phone in its final landscape position before pressing **Center**.
+Verify yaw, pitch, roll, and X/Y/Z one at a time in OpenTrack before driving.
+If the physical mount orientation changes, press **Center** again.

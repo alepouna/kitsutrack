@@ -63,6 +63,9 @@ final class HeadTracker: NSObject, ObservableObject, ARSessionDelegate {
         server.start()
         guard ARFaceTrackingConfiguration.isSupported else { return }
         let configuration = ARFaceTrackingConfiguration()
+        // Camera alignment uses ARKit's native sensor basis, independent of
+        // whether the SwiftUI interface is currently portrait or landscape.
+        configuration.worldAlignment = .camera
         configuration.isLightEstimationEnabled = false
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
     }

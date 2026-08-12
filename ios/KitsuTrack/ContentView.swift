@@ -14,19 +14,30 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 14) {
-                    title
-                    connectionHeader
-                    broadcastButton
-                    centerButton
-                    connectionSection
-                    networkDestination
-                    viewSection
-                    preview
-                    diagnostics
+            GeometryReader { proxy in
+                let isLandscape = proxy.size.width > proxy.size.height
+                let paneWidth = (proxy.size.width - 48) / 2
+                ScrollView {
+                    VStack(spacing: 14) {
+                        title(isLandscape: isLandscape)
+                        if isLandscape {
+                            HStack(alignment: .top, spacing: 16) {
+                                landscapeControlPane
+                                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                                    .frame(width: paneWidth, alignment: .topLeading)
+                                landscapeDataPane
+                                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                                    .frame(width: paneWidth, alignment: .topLeading)
+                            }
+                        } else {
+                            connectionHeader
+                            controlPane
+                            dataPane(previewHeight: 240)
+                        }
+                    }
+                    .padding()
                 }
-                .padding()
+                .scrollIndicators(.hidden)
             }
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) { appMenu }
@@ -46,11 +57,11 @@ struct ContentView: View {
         }
     }
 
-    private var title: some View {
+    private func title(isLandscape: Bool) -> some View {
         Text("KitsuTrack")
             .font(.largeTitle.bold())
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, -70)
+            .padding(.top, isLandscape ? -70 : -70)
     }
 
     private var connectionHeader: some View {
@@ -109,10 +120,12 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private var preview: some View {
+    @ViewBuilder private func preview(height: CGFloat) -> some View {
         if settings.showCameraPreview {
             CameraPreview(session: tracker.session)
-                .frame(height: 240).clipShape(RoundedRectangle(cornerRadius: 16))
+                .frame(maxWidth: .infinity)
+                .frame(height: height)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
         }
     }
 
@@ -141,6 +154,43 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 7) {
             sectionTitle("View")
             displayControls
+        }
+    }
+
+    private var controlPane: some View {
+        VStack(spacing: 14) {
+            coreControls
+            viewSection
+        }
+    }
+
+    private var landscapeControlPane: some View {
+        VStack(spacing: 14) {
+            connectionHeader
+            coreControls
+        }
+    }
+
+    private var coreControls: some View {
+        VStack(spacing: 14) {
+            broadcastButton
+            centerButton
+            connectionSection
+            networkDestination
+        }
+    }
+
+    private var landscapeDataPane: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            displayControls
+            dataPane(previewHeight: 190)
+        }
+    }
+
+    private func dataPane(previewHeight: CGFloat) -> some View {
+        VStack(spacing: 14) {
+            preview(height: previewHeight)
+            diagnostics
         }
     }
 

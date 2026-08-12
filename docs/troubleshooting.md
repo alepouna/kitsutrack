@@ -28,6 +28,15 @@ The camera needs an unobstructed view. Mount the phone near the monitor, use rea
 
 Use inverts on OpenTrack options.
 
+## Landscape mount gives unexpected axes
+
+Mount the phone in its final landscape position, then press **Center**. The
+app uses ARKit's camera coordinate system and a center-relative pose, so
+rotating the SwiftUI interface should not change the OpenTrack packet axes. If
+yaw, pitch, roll, or X/Y/Z are still reversed, verify one axis at a time and
+apply the relevant invert in OpenTrack. Press **Center** again whenever the
+physical mount orientation changes.
+
 ## Connection stops when leaving the app
 
 This is expected. iOS does not allow continuous TrueDepth capture in the background.
