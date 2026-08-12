@@ -19,11 +19,10 @@ struct ContentView: View {
                     title
                     connectionHeader
                     broadcastButton
-                    transportPicker
-                    networkDestination
-                    Divider().padding(.vertical, 2)
                     centerButton
-                    displayControls
+                    connectionSection
+                    networkDestination
+                    viewSection
                     preview
                     diagnostics
                 }
@@ -57,20 +56,45 @@ struct ContentView: View {
     private var connectionHeader: some View {
         HStack(spacing: 12) {
             Circle().fill(statusColor).frame(width: 12, height: 12)
-            Text(statusTitle).font(.headline)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(statusTitle).font(.headline)
+                Text(statusDetail).font(.subheadline).foregroundStyle(.secondary)
+            }
             Spacer()
         }
-        .padding(16).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(16)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
-    private var transportPicker: some View {
-        Picker("Connection", selection: $settings.transportMode) {
-            ForEach(TransportMode.allCases) { Text($0.title).tag($0) }
+    private var connectionSection: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Connection")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
+            Menu {
+                ForEach(TransportMode.allCases) { mode in
+                    Button { settings.transportMode = mode } label: {
+                        HStack {
+                            Text(mode.title)
+                            if mode == settings.transportMode { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            } label: {
+                HStack {
+                    Label(settings.transportMode.title, systemImage: "cable.connector")
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 13)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.bordered)
         }
-        .pickerStyle(.menu)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder private var networkDestination: some View {
@@ -108,13 +132,20 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
-        .controlSize(.regular)
+        .controlSize(.large)
         .tint(.blue)
         .disabled(!tracker.isTracking)
     }
 
+    private var viewSection: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            sectionTitle("View")
+            displayControls
+        }
+    }
+
     private var displayControls: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button { settings.showCameraPreview.toggle() } label: {
                 Label("Preview", systemImage: "eye")
                     .frame(maxWidth: .infinity)
@@ -131,7 +162,14 @@ struct ContentView: View {
             .tint(settings.showDiagnostics ? .blue : .gray)
         }
         .buttonStyle(.bordered)
-        .controlSize(.small)
+        .controlSize(.regular)
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.leading, 4)
     }
 
     @ViewBuilder private var diagnostics: some View {
@@ -172,6 +210,19 @@ struct ContentView: View {
         case .failed: return "Network connection failed"
         case .connecting: return "Connecting"
         case .idle: return "Ready"
+        }
+    }
+
+    private var statusDetail: String {
+        if !tracker.isBroadcasting { return "Tracking is still available for preview and centering." }
+        if !tracker.isTracking { return "Move into view to start tracking." }
+        if settings.transportMode == .usb { return tracker.clientCount > 0 ? "Sending through USB Bridge." : "Waiting for the USB Bridge." }
+        if !networkDestinationIsValid { return "Add an OpenTrack destination in Network mode." }
+        switch tracker.networkState {
+        case .ready: return "Sending to OpenTrack."
+        case .failed: return "Check the destination and your network connection."
+        case .connecting: return "Connecting to OpenTrack."
+        case .idle: return "Ready to send to OpenTrack."
         }
     }
 
