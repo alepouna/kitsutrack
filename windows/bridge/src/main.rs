@@ -656,6 +656,9 @@ fn log_files(logger: tauri::State<'_, Arc<Logger>>) -> Vec<LogFileSummary> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
+            if !valid_session(&session) || !file.file_type().ok()?.is_file() {
+                return None;
+            }
             let entries = read_session(&file.path(), &session);
             if entries.is_empty() {
                 return None;
@@ -684,7 +687,10 @@ fn log_files(logger: tauri::State<'_, Arc<Logger>>) -> Vec<LogFileSummary> {
 
 #[tauri::command]
 fn log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Vec<LogEntry> {
-    read_session(&logger.session_dir.join(format!("{session}.log")), &session)
+    if !valid_session(&session) {
+        return Vec::new();
+    }
+    read_session(&session_path(&logger.session_dir, &session), &session)
 }
 
 #[tauri::command]
@@ -714,6 +720,14 @@ fn export_all_logs(app: AppHandle) {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
+            if !valid_session(&session)
+                || !session_file
+                    .file_type()
+                    .map(|kind| !kind.is_file())
+                    .unwrap_or(true)
+            {
+                continue;
+            }
             let entries = read_session(&session_file.path(), &session);
             if archive
                 .start_file(format!("kitsutrack-{session}.log"), options)
@@ -737,7 +751,7 @@ fn export_all_logs(app: AppHandle) {
 
 #[tauri::command]
 fn reveal_log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Result<(), String> {
-    let path = logger.session_dir.join(format!("{session}.log"));
+    let path = validated_session_path(&logger.session_dir, &session)?;
     #[cfg(target_os = "macos")]
     let result = Command::new("open").arg("-R").arg(&path).spawn();
     #[cfg(windows)]
@@ -753,7 +767,7 @@ fn reveal_log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Re
 
 #[tauri::command]
 fn delete_log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Result<(), String> {
-    let path = logger.session_dir.join(format!("{session}.log"));
+    let path = validated_session_path(&logger.session_dir, &session)?;
     if session == logger.session {
         let mut file = logger.file.lock().expect("log file lock");
         file.set_len(0).map_err(|error| error.to_string())?;
@@ -772,6 +786,14 @@ fn delete_all_log_files(logger: tauri::State<'_, Arc<Logger>>) -> Result<(), Str
         .map_err(|error| error.to_string())?
         .flatten()
     {
+        if !entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_file()
+            || entry.path().extension().and_then(|ext| ext.to_str()) != Some("log")
+        {
+            continue;
+        }
         if entry
             .path()
             .file_stem()
@@ -794,7 +816,21 @@ fn create_logger(app: &AppHandle, _args: &Args) -> Result<Logger> {
         .path()
         .resolve("sessions", BaseDirectory::AppLocalData)?;
     fs::create_dir_all(&session_dir)?;
-    let mut sessions = fs::read_dir(&session_dir)?.flatten().collect::<Vec<_>>();
+    let mut sessions = fs::read_dir(&session_dir)?
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_type()
+                .map(|kind| kind.is_file())
+                .unwrap_or(false)
+                && entry.path().extension().and_then(|ext| ext.to_str()) == Some("log")
+                && entry
+                    .path()
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(valid_session)
+        })
+        .collect::<Vec<_>>();
     sessions.sort_by_key(|entry| entry.file_name());
     for old in sessions.into_iter().rev().skip(9) {
         let _ = fs::remove_file(old.path());
@@ -844,6 +880,20 @@ fn read_session(path: &std::path::Path, session: &str) -> Vec<LogEntry> {
                 .or_else(|| parse_legacy_entry(line, session, index as u64 + 1))
         })
         .collect()
+}
+
+fn valid_session(session: &str) -> bool {
+    !session.is_empty() && session.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn session_path(session_dir: &std::path::Path, session: &str) -> PathBuf {
+    session_dir.join(format!("{session}.log"))
+}
+
+fn validated_session_path(session_dir: &std::path::Path, session: &str) -> Result<PathBuf, String> {
+    valid_session(session)
+        .then(|| session_path(session_dir, session))
+        .ok_or_else(|| "Invalid log session".to_string())
 }
 
 fn parse_legacy_entry(line: &str, session: &str, id: u64) -> Option<LogEntry> {
