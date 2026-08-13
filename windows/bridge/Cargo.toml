@@ -9,7 +9,6 @@ anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 iht-protocol = { path = "../../shared/protocol" }
 open = "5.3"
-os_info = "3.13"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "json"] }
 semver = "1.0"
 serde = { version = "1.0", features = ["derive"] }

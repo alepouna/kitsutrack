@@ -89,7 +89,6 @@ struct LogFileSummary {
 }
 
 struct Logger {
-    entries: Mutex<Vec<LogEntry>>,
     file: Mutex<File>,
     session_dir: PathBuf,
     session: String,
@@ -760,7 +759,6 @@ fn delete_log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Re
         file.set_len(0).map_err(|error| error.to_string())?;
         file.seek(SeekFrom::Start(0))
             .map_err(|error| error.to_string())?;
-        logger.entries.lock().expect("log lock").clear();
     } else if path.exists() {
         fs::remove_file(path).map_err(|error| error.to_string())?;
     }
@@ -790,7 +788,6 @@ fn delete_all_log_files(logger: tauri::State<'_, Arc<Logger>>) -> Result<(), Str
             file.set_len(0).map_err(|error| error.to_string())?;
             file.seek(SeekFrom::Start(0))
                 .map_err(|error| error.to_string())?;
-            logger.entries.lock().expect("log lock").clear();
         } else {
             fs::remove_file(entry.path()).map_err(|error| error.to_string())?;
         }
@@ -829,7 +826,6 @@ fn create_logger(app: &AppHandle, _args: &Args) -> Result<Logger> {
         .append(true)
         .open(&file_path)?;
     Ok(Logger {
-        entries: Mutex::new(Vec::new()),
         file: Mutex::new(file),
         session_dir,
         session,
@@ -852,7 +848,6 @@ fn log(app: &AppHandle, level: Level, message: impl Into<String>) {
     if let Ok(line) = serde_json::to_string(&entry) {
         let _ = writeln!(logger.file.lock().expect("log file lock"), "{line}");
     }
-    logger.entries.lock().expect("log lock").push(entry.clone());
     let _ = app.emit("log", entry);
 }
 
