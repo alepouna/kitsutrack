@@ -24,7 +24,7 @@ function renderFiles() {
 async function openFile(session) {
   currentSession = session; entries = await invoke('log_file', { session });
   $('#files').hidden = true; $('#entries').hidden = false; $('#toolbar').hidden = false; $('#file-actions').hidden = false; $('#main-actions').hidden = true; $('#back').hidden = false;
-  $('#title').textContent = `${formatDate(session)} · CSS TEST 7K2`; renderEntries();
+  $('#title').textContent = formatDate(session); renderEntries();
 }
 function renderEntries() {
   const query = $('#search').value.trim().toLowerCase();
