@@ -9,9 +9,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     net::{TcpStream, UdpSocket},
+    panic::{self, AssertUnwindSafe},
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -22,6 +23,9 @@ use tauri::{
 };
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_positioner::{Position, WindowExt};
+
+#[cfg(windows)]
+mod windows_webview;
 
 const REPOSITORY_URL: &str = "https://github.com/alepouna/kitsutrack";
 const ISSUE_URL: &str = "https://github.com/alepouna/kitsutrack/issues/new/choose";
@@ -105,6 +109,22 @@ struct UpdateItem {
 }
 struct ChildProcess(Mutex<Option<Child>>);
 
+trait RecoverLock<T> {
+    fn recover(&self, context: &str) -> MutexGuard<'_, T>;
+}
+
+impl<T> RecoverLock<T> for Mutex<T> {
+    fn recover(&self, context: &str) -> MutexGuard<'_, T> {
+        match self.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                eprintln!("Recovered poisoned lock ({context}): {error}");
+                error.into_inner()
+            }
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct Release {
     tag_name: String,
@@ -126,6 +146,7 @@ fn main() {
             delete_all_log_files,
             menu_state,
             open_logs,
+            client_error,
             open_about,
             report_feedback,
             check_for_updates,
@@ -139,6 +160,7 @@ fn main() {
 fn setup(app: AppHandle, args: Args) -> Result<()> {
     let logger = Arc::new(create_logger(&app, &args)?);
     app.manage(logger.clone());
+    install_panic_logging(&app);
     app.manage(ChildProcess(Mutex::new(None)));
 
     app.manage(StatusItem {
@@ -151,7 +173,7 @@ fn setup(app: AppHandle, args: Args) -> Result<()> {
         url: Mutex::new(None),
     });
     let icon = app_icon()?;
-    TrayIconBuilder::new()
+    if let Err(error) = TrayIconBuilder::new()
         .icon(icon)
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -164,7 +186,15 @@ fn setup(app: AppHandle, args: Args) -> Result<()> {
                 show_menu(tray.app_handle());
             }
         })
-        .build(&app)?;
+        .build(&app)
+    {
+        log(
+            &app,
+            Level::Error,
+            format!("Could not initialize tray icon: {error}"),
+        );
+        return Err(error.into());
+    }
 
     log(
         &app,
@@ -175,8 +205,7 @@ fn setup(app: AppHandle, args: Args) -> Result<()> {
         set_status(&app, "Connected / Tracking");
         *app.state::<BridgeStats>()
             .tracking_rate
-            .lock()
-            .expect("tracking rate lock") = Some(60);
+            .recover("tracking rate lock") = Some(60);
         log(&app, Level::Info, "USB tunnel connected to Aurora's iPhone");
         log(
             &app,
@@ -193,8 +222,20 @@ fn setup(app: AppHandle, args: Args) -> Result<()> {
     } else {
         let update_app = app.clone();
         thread::spawn(move || {
-            if automatic_update_check_due(&update_app) {
-                check_updates(update_app, false);
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                if automatic_update_check_due(&update_app) {
+                    check_updates(update_app.clone(), false);
+                }
+            }));
+            if let Err(payload) = result {
+                log(
+                    &update_app,
+                    Level::Error,
+                    format!(
+                        "Automatic update-check worker panicked: {}",
+                        panic_message(payload)
+                    ),
+                );
             }
         });
         thread::spawn(move || run_bridge(app, args));
@@ -203,32 +244,47 @@ fn setup(app: AppHandle, args: Args) -> Result<()> {
 }
 
 fn run_bridge(app: AppHandle, args: Args) {
-    if let Err(error) = verify_windows_usbmux(&args) {
-        set_status(&app, "Disconnected");
-        log(&app, Level::Error, format!("{error:#}"));
+    loop {
+        let result = panic::catch_unwind(AssertUnwindSafe(|| run_bridge_session(&app, &args)));
+        if let Err(payload) = result {
+            log(
+                &app,
+                Level::Error,
+                format!("Tracking worker panicked: {}", panic_message(payload)),
+            );
+            stop_helper(&app);
+            set_status(&app, "Disconnected");
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
+fn run_bridge_session(app: &AppHandle, args: &Args) {
+    if let Err(error) = verify_windows_usbmux(args) {
+        set_status(app, "Disconnected");
+        log(app, Level::Error, format!("{error:#}"));
+        thread::sleep(Duration::from_secs(5));
         return;
     }
     loop {
-        start_helper(&app, &args);
-        set_status(&app, "Disconnected");
+        start_helper(app, args);
+        set_status(app, "Disconnected");
         *app.state::<BridgeStats>()
             .tracking_rate
-            .lock()
-            .expect("tracking rate lock") = None;
+            .recover("tracking rate lock") = None;
         log(
-            &app,
+            app,
             Level::Info,
             format!("Connecting to USB tunnel at {}", args.source),
         );
-        match forward(&app, &args) {
-            Ok(()) => log(&app, Level::Warning, "Tracker disconnected"),
-            Err(error) => log(&app, Level::Warning, format!("Connection error: {error:#}")),
+        match forward(app, args) {
+            Ok(()) => log(app, Level::Warning, "Tracker disconnected"),
+            Err(error) => log(app, Level::Warning, format!("Connection error: {error:#}")),
         }
-        set_status(&app, "Disconnected");
+        set_status(app, "Disconnected");
         *app.state::<BridgeStats>()
             .tracking_rate
-            .lock()
-            .expect("tracking rate lock") = None;
+            .recover("tracking rate lock") = None;
         thread::sleep(Duration::from_secs(1));
     }
 }
@@ -283,8 +339,7 @@ fn forward(app: &AppHandle, args: &Args) -> Result<()> {
         if rate_started.elapsed() >= Duration::from_secs(1) {
             *app.state::<BridgeStats>()
                 .tracking_rate
-                .lock()
-                .expect("tracking rate lock") = Some(rate_count);
+                .recover("tracking rate lock") = Some(rate_count);
             let _ = app.emit("menu-state", menu_state(app.clone()));
             rate_started = Instant::now();
             rate_count = 0;
@@ -321,12 +376,25 @@ fn forward(app: &AppHandle, args: &Args) -> Result<()> {
 
 fn start_helper(app: &AppHandle, args: &Args) {
     let child_process = app.state::<ChildProcess>();
-    let mut child_slot = child_process.0.lock().expect("helper lock");
-    if child_slot
-        .as_mut()
-        .is_some_and(|child| child.try_wait().ok().flatten().is_none())
-    {
-        return;
+    let mut child_slot = child_process.0.recover("helper lock");
+    if let Some(child) = child_slot.as_mut() {
+        match child.try_wait() {
+            Ok(None) => return,
+            Ok(Some(status)) => log(
+                app,
+                if status.success() {
+                    Level::Info
+                } else {
+                    Level::Warning
+                },
+                format!("USB forwarding helper exited with {status}"),
+            ),
+            Err(error) => log(
+                app,
+                Level::Warning,
+                format!("Could not inspect USB forwarding helper: {error}"),
+            ),
+        }
     }
     *child_slot = None;
     if args.no_usb_helper || args.source != "127.0.0.1:4243" {
@@ -380,39 +448,82 @@ fn start_helper(app: &AppHandle, args: &Args) {
 
 fn relay_helper_output<R: Read + Send + 'static>(app: AppHandle, output: R, label: &'static str) {
     thread::spawn(move || {
-        for line in BufReader::new(output)
-            .lines()
-            .map_while(std::result::Result::ok)
-        {
-            log(&app, Level::Info, format!("{label}: {line}"));
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            for line in BufReader::new(output).lines() {
+                match line {
+                    Ok(line) => log(&app, Level::Info, format!("{label}: {line}")),
+                    Err(error) => {
+                        log(
+                            &app,
+                            Level::Warning,
+                            format!("Could not read {label} output: {error}"),
+                        );
+                        break;
+                    }
+                }
+            }
+        }));
+        if let Err(payload) = result {
+            log(
+                &app,
+                Level::Error,
+                format!("{label} output worker panicked: {}", panic_message(payload)),
+            );
         }
     });
 }
 
 fn stop_helper(app: &AppHandle) {
-    if let Some(mut child) = app
-        .state::<ChildProcess>()
-        .0
-        .lock()
-        .expect("helper lock")
-        .take()
-    {
-        let _ = child.kill();
-        let _ = child.wait();
+    if let Some(mut child) = app.state::<ChildProcess>().0.recover("helper lock").take() {
+        if let Err(error) = child.kill() {
+            log(
+                app,
+                Level::Warning,
+                format!("Could not stop USB forwarding helper: {error}"),
+            );
+        }
+        if let Err(error) = child.wait() {
+            log(
+                app,
+                Level::Warning,
+                format!("Could not wait for USB forwarding helper: {error}"),
+            );
+        }
     }
 }
 
 fn show_logs(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("logs") {
-        let _ = window.show();
-        let _ = window.set_focus();
+        if let Err(error) = window.show().and_then(|_| window.set_focus()) {
+            log(
+                app,
+                Level::Warning,
+                format!("Could not show logs window: {error}"),
+            );
+        }
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, "logs", WebviewUrl::App("index.html".into()))
+    let window = match WebviewWindowBuilder::new(app, "logs", WebviewUrl::App("index.html".into()))
         .title("KitsuTrack Bridge Logs")
         .inner_size(820.0, 540.0)
         .min_inner_size(560.0, 320.0)
-        .build();
+        .build()
+    {
+        Ok(window) => window,
+        Err(error) => {
+            log(
+                app,
+                Level::Error,
+                format!("Could not create logs window: {error}"),
+            );
+            return;
+        }
+    };
+
+    #[cfg(windows)]
+    windows_webview::install_process_failed_recovery(&window);
+    #[cfg(not(windows))]
+    let _ = window;
 }
 
 fn show_menu(app: &AppHandle) {
@@ -426,15 +537,31 @@ fn show_menu(app: &AppHandle) {
         let _ = window.move_window_constrained(Position::TrayCenter);
         return;
     }
-    let Ok(icon) = app_icon() else {
-        return;
+    let icon = match app_icon() {
+        Ok(icon) => icon,
+        Err(error) => {
+            log(
+                app,
+                Level::Error,
+                format!("Could not load tray menu icon: {error}"),
+            );
+            return;
+        }
     };
-    let Ok(builder) =
-        WebviewWindowBuilder::new(app, "menu", WebviewUrl::App("menu.html".into())).icon(icon)
-    else {
-        return;
+    let builder = match WebviewWindowBuilder::new(app, "menu", WebviewUrl::App("menu.html".into()))
+        .icon(icon)
+    {
+        Ok(builder) => builder,
+        Err(error) => {
+            log(
+                app,
+                Level::Error,
+                format!("Could not create tray menu window: {error}"),
+            );
+            return;
+        }
     };
-    let _ = builder
+    match builder
         .title("KitsuTrack Bridge")
         .inner_size(360.0, 360.0)
         .resizable(false)
@@ -446,10 +573,19 @@ fn show_menu(app: &AppHandle) {
         .visible(false)
         .build()
         .and_then(|window| {
+            #[cfg(windows)]
+            windows_webview::install_process_failed_recovery(&window);
             window.move_window_constrained(Position::TrayCenter)?;
             window.show()?;
             window.set_focus()
-        });
+        }) {
+        Ok(()) => {}
+        Err(error) => log(
+            app,
+            Level::Warning,
+            format!("Could not show tray menu window: {error}"),
+        ),
+    }
 }
 
 fn app_icon() -> tauri::Result<tauri::image::Image<'static>> {
@@ -474,34 +610,51 @@ fn show_about(app: &AppHandle) {
 }
 
 fn check_updates(app: AppHandle, manual: bool) {
-    thread::spawn(move || match latest_release() {
-        Ok(release) => {
-            let _ = fs::write(update_check_path(&app), unix_millis().to_string());
-            if is_newer_release(&release.tag_name) {
-                let update = app.state::<UpdateItem>();
-                *update.url.lock().expect("update lock") = Some(release.html_url);
-                let _ = app.emit("menu-state", menu_state(app.clone()));
+    thread::spawn(move || {
+        let result = panic::catch_unwind(AssertUnwindSafe(|| match latest_release() {
+            Ok(release) => {
+                if let Ok(path) = update_check_path(&app)
+                    && let Err(error) = fs::write(path, unix_millis().to_string())
+                {
+                    log(
+                        &app,
+                        Level::Warning,
+                        format!("Could not record update check time: {error}"),
+                    );
+                }
+                if is_newer_release(&release.tag_name) {
+                    let update = app.state::<UpdateItem>();
+                    *update.url.recover("update lock") = Some(release.html_url);
+                    let _ = app.emit("menu-state", menu_state(app.clone()));
+                    log(
+                        &app,
+                        Level::Info,
+                        format!("Update available: {}", release.tag_name),
+                    );
+                    let _ = manual;
+                } else if manual {
+                    log(&app, Level::Info, "KitsuTrack Bridge is up to date");
+                } else {
+                    log(
+                        &app,
+                        Level::Info,
+                        "Update check completed; bridge is up to date",
+                    );
+                }
+            }
+            Err(error) => {
                 log(
                     &app,
-                    Level::Info,
-                    format!("Update available: {}", release.tag_name),
-                );
-                let _ = manual;
-            } else if manual {
-                log(&app, Level::Info, "KitsuTrack Bridge is up to date");
-            } else {
-                log(
-                    &app,
-                    Level::Info,
-                    "Update check completed; bridge is up to date",
+                    Level::Warning,
+                    format!("Update check failed: {error:#}"),
                 );
             }
-        }
-        Err(error) => {
+        }));
+        if let Err(payload) = result {
             log(
                 &app,
-                Level::Warning,
-                format!("Update check failed: {error:#}"),
+                Level::Error,
+                format!("Update worker panicked: {}", panic_message(payload)),
             );
         }
     });
@@ -528,14 +681,22 @@ fn is_newer_release(tag: &str) -> bool {
     latest > installed
 }
 
-fn update_check_path(app: &AppHandle) -> PathBuf {
+fn update_check_path(app: &AppHandle) -> Result<PathBuf> {
     app.path()
         .resolve("last-update-check", BaseDirectory::AppLocalData)
-        .expect("resolve update check path")
+        .context("resolve update check path")
 }
 
 fn automatic_update_check_due(app: &AppHandle) -> bool {
-    fs::read_to_string(update_check_path(app))
+    let Ok(path) = update_check_path(app) else {
+        log(
+            app,
+            Level::Warning,
+            "Could not resolve update check path; checking for updates",
+        );
+        return true;
+    };
+    fs::read_to_string(path)
         .ok()
         .and_then(|text| text.trim().parse::<u128>().ok())
         .is_none_or(|last_check| {
@@ -545,8 +706,14 @@ fn automatic_update_check_due(app: &AppHandle) -> bool {
 
 fn open_update(app: &AppHandle) {
     let update = app.state::<UpdateItem>();
-    if let Some(url) = update.url.lock().expect("update lock").as_deref() {
-        let _ = open::that(url);
+    if let Some(url) = update.url.recover("update lock").as_deref()
+        && let Err(error) = open::that(url)
+    {
+        log(
+            app,
+            Level::Warning,
+            format!("Could not open update page: {error}"),
+        );
     }
 }
 
@@ -564,20 +731,17 @@ fn menu_state(app: AppHandle) -> MenuState {
         status: app
             .state::<StatusItem>()
             .text
-            .lock()
-            .expect("status lock")
+            .recover("status lock")
             .clone(),
         iphone: "iPhone connected".into(),
         tracking_rate: *app
             .state::<BridgeStats>()
             .tracking_rate
-            .lock()
-            .expect("tracking rate lock"),
+            .recover("tracking rate lock"),
         update_available: app
             .state::<UpdateItem>()
             .url
-            .lock()
-            .expect("update lock")
+            .recover("update lock")
             .is_some(),
     }
 }
@@ -585,6 +749,15 @@ fn menu_state(app: AppHandle) -> MenuState {
 #[tauri::command]
 fn open_logs(app: AppHandle) {
     show_logs(&app);
+}
+
+#[tauri::command]
+fn client_error(app: AppHandle, message: String) {
+    log(
+        &app,
+        Level::Error,
+        format!("Frontend error: {}", message.trim()),
+    );
 }
 
 #[tauri::command]
@@ -609,6 +782,7 @@ fn open_update_command(app: AppHandle) {
 
 #[tauri::command]
 fn quit(app: AppHandle) {
+    log(&app, Level::Info, "Bridge shutdown requested");
     stop_helper(&app);
     app.exit(0);
 }
@@ -781,7 +955,7 @@ fn reveal_log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Re
 fn delete_log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Result<(), String> {
     let path = validated_session_path(&logger.session_dir, &session)?;
     if session == logger.session {
-        let mut file = logger.file.lock().expect("log file lock");
+        let mut file = logger.file.recover("log file lock");
         file.set_len(0).map_err(|error| error.to_string())?;
         file.seek(SeekFrom::Start(0))
             .map_err(|error| error.to_string())?;
@@ -810,7 +984,7 @@ fn delete_all_log_files(logger: tauri::State<'_, Arc<Logger>>) -> Result<(), Str
             .file_stem()
             .is_some_and(|name| name == logger.session.as_str())
         {
-            let mut file = logger.file.lock().expect("log file lock");
+            let mut file = logger.file.recover("log file lock");
             file.set_len(0).map_err(|error| error.to_string())?;
             file.seek(SeekFrom::Start(0))
                 .map_err(|error| error.to_string())?;
@@ -859,22 +1033,49 @@ fn create_logger(app: &AppHandle, _args: &Args) -> Result<Logger> {
     })
 }
 
+fn install_panic_logging(app: &AppHandle) {
+    let app = app.clone();
+    let previous_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        log(&app, Level::Error, format!("Application panic: {info}"));
+        previous_hook(info);
+    }));
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(ToString::to_string)
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic payload".into())
+}
+
 fn log(app: &AppHandle, level: Level, message: impl Into<String>) {
     let logger = app.state::<Arc<Logger>>();
-    let mut next_id = logger.next_id.lock().expect("log id lock");
+    let message = message.into();
+    let mut next_id = logger.next_id.recover("log id lock");
     let entry = LogEntry {
         id: *next_id,
         session: logger.session.clone(),
         timestamp: timestamp(),
-        level,
-        message: message.into(),
+        level: level.clone(),
+        message,
     };
     *next_id += 1;
     drop(next_id);
     if let Ok(line) = serde_json::to_string(&entry) {
-        let _ = writeln!(logger.file.lock().expect("log file lock"), "{line}");
+        let mut file = logger.file.recover("log file lock");
+        if let Err(error) = writeln!(file, "{line}") {
+            eprintln!("Could not write application log entry: {error}");
+        } else if matches!(level, Level::Warning | Level::Error) {
+            let _ = file.flush();
+        }
+    } else {
+        eprintln!("Could not serialize application log entry");
     }
-    let _ = app.emit("log", entry);
+    if let Err(error) = app.emit("log", entry) {
+        eprintln!("Could not emit application log entry: {error}");
+    }
 }
 
 fn read_session(path: &std::path::Path, session: &str) -> Vec<LogEntry> {
@@ -934,7 +1135,7 @@ fn level_name(level: &Level) -> &'static str {
 
 fn set_status(app: &AppHandle, status: &str) {
     let item = app.state::<StatusItem>();
-    *item.text.lock().expect("status lock") = status.into();
+    *item.text.recover("status lock") = status.into();
     let _ = app.emit("menu-state", menu_state(app.clone()));
 }
 fn unix_millis() -> u128 {

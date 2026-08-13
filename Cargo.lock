@@ -1985,6 +1985,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-positioner",
  "time",
+ "webview2-com",
  "zip",
 ]
 

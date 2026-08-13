@@ -2,8 +2,21 @@ const status = document.querySelector('#status');
 const iphone = document.querySelector('#iphone');
 const rate = document.querySelector('#rate');
 const update = document.querySelector('#update');
+let invoke, reportingError = false;
+
+function reportError(error, context = 'Menu UI') {
+  const message = `${context}: ${error instanceof Error ? error.message : String(error)}`;
+  status.lastChild.textContent = 'UI error — bridge still running';
+  status.className = 'disconnected';
+  document.querySelector('#retry').classList.remove('hidden');
+  if (invoke && !reportingError) {
+    reportingError = true;
+    invoke('client_error', { message }).catch(() => {}).finally(() => { reportingError = false; });
+  }
+}
 
 function render(state) {
+  document.querySelector('#retry').classList.add('hidden');
   const trackingRate = state.trackingRate ?? state.tracking_rate;
   const updateAvailable = state.updateAvailable ?? state.update_available;
   status.lastChild.textContent = state.status;
@@ -20,11 +33,14 @@ function connect() {
     setTimeout(connect, 25);
     return;
   }
-  tauri.core.invoke('menu_state').then(render);
-  tauri.event.listen('menu-state', ({ payload }) => render(payload));
+  invoke = tauri.core.invoke;
+  invoke('menu_state').then(render).catch(error => reportError(error, 'Menu command menu_state'));
+  tauri.event.listen('menu-state', ({ payload }) => render(payload)).catch(error => reportError(error, 'Menu event listener'));
   document.querySelectorAll('[data-command]').forEach(button => {
-    button.addEventListener('click', () => tauri.core.invoke(button.dataset.command));
+    button.addEventListener('click', () => invoke(button.dataset.command).catch(error => reportError(error, `Menu command ${button.dataset.command}`)));
   });
 }
 
+window.addEventListener('error', event => reportError(event.error || event.message, 'Menu UI error'));
+window.addEventListener('unhandledrejection', event => reportError(event.reason, 'Menu UI rejection'));
 connect();
