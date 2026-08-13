@@ -11,7 +11,10 @@ use std::{
 
 use tauri::{Manager, WebviewWindow};
 use webview2_com::{
-    Microsoft::Web::WebView2::Win32::ICoreWebView2ProcessFailedEventArgs, ProcessFailedEventHandler,
+    Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_PROCESS_FAILED_KIND, ICoreWebView2ProcessFailedEventArgs,
+    },
+    ProcessFailedEventHandler,
 };
 
 const BROWSER_PROCESS_EXITED: i32 = 0;
@@ -43,9 +46,11 @@ pub fn install_process_failed_recovery(window: &WebviewWindow) {
             let kind = args
                 .as_ref()
                 .and_then(|args: &ICoreWebView2ProcessFailedEventArgs| {
-                    unsafe { args.ProcessFailedKind() }.ok()
+                    let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+                    unsafe { args.ProcessFailedKind(&mut kind) }
+                        .ok()
+                        .map(|()| kind.0)
                 })
-                .map(|kind| kind.0)
                 .unwrap_or(-1);
             super::log(
                 &handler_app,
