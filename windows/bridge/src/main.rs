@@ -711,6 +711,18 @@ fn export_all_logs(app: AppHandle) {
             .into_iter()
             .flatten()
             .flatten()
+            .filter(|entry| {
+                entry
+                    .file_type()
+                    .map(|kind| kind.is_file())
+                    .unwrap_or(false)
+                    && entry.path().extension().and_then(|ext| ext.to_str()) == Some("log")
+                    && entry
+                        .path()
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .is_some_and(valid_session)
+            })
             .collect::<Vec<_>>();
         sessions.sort_by_key(|entry| entry.file_name());
         for session_file in sessions {
