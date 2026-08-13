@@ -487,12 +487,9 @@ fn check_updates(app: AppHandle, manual: bool) {
                     Level::Info,
                     format!("Update available: {}", release.tag_name),
                 );
-                if manual {
-                    show_temporary_status(&app, format!("Update available: {}", release.tag_name));
-                }
+                let _ = manual;
             } else if manual {
                 log(&app, Level::Info, "KitsuTrack Bridge is up to date");
-                show_temporary_status(&app, "KitsuTrack Bridge is up to date");
             } else {
                 log(
                     &app,
@@ -507,9 +504,6 @@ fn check_updates(app: AppHandle, manual: bool) {
                 Level::Warning,
                 format!("Update check failed: {error:#}"),
             );
-            if manual {
-                show_temporary_status(&app, "Couldn't check for updates — view Logs");
-            }
         }
     });
 }
@@ -618,25 +612,6 @@ fn open_update_command(app: AppHandle) {
 fn quit(app: AppHandle) {
     stop_helper(&app);
     app.exit(0);
-}
-
-fn show_temporary_status(app: &AppHandle, text: impl Into<String>) {
-    let temporary = text.into();
-    let original = app
-        .state::<StatusItem>()
-        .text
-        .lock()
-        .expect("status lock")
-        .clone();
-    set_status(app, &temporary);
-    let app = app.clone();
-    thread::spawn(move || {
-        thread::sleep(Duration::from_secs(5));
-        let status = app.state::<StatusItem>();
-        if *status.text.lock().expect("status lock") == temporary {
-            set_status(&app, &original);
-        }
-    });
 }
 
 #[tauri::command]
