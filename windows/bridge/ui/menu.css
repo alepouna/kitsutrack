@@ -1,12 +1,12 @@
 :root { color-scheme: dark; font-family: "Segoe UI Variable", "Segoe UI", sans-serif; background: transparent; color: #edf0ec; }
-body { margin: 0; background: #1b1d20; }
-main { min-height: 343px; overflow: hidden; background: #1b1d20; border: 1px solid #393d42; }
-header { padding: 21px 21px 17px; border-bottom: 1px solid #32363a; }
-h1 { margin: 0 0 14px; font-size: 18px; line-height: 1; font-weight: 650; letter-spacing: -.01em; }
+body { margin: 0; padding: 6px; background: transparent; overflow: hidden; }
+main { overflow: hidden; background: #1b1d20; border: 1px solid #393d42; border-radius: 14px; }
+header { padding: 18px 20px 16px; border-bottom: 1px solid #32363a; }
+h1 { margin: 0 0 12px; font-size: 18px; line-height: 1; font-weight: 650; letter-spacing: -.01em; }
 p { display: flex; align-items: center; gap: 9px; margin: 0; font-size: 13px; font-weight: 600; color: #55dc9a; }
 p i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 15%, transparent); }
 p.waiting { color: #f0b35f; } p.disconnected { color: #b8bdba; }
-.details { padding: 13px 21px; border-bottom: 1px solid #32363a; }
+.details { padding: 11px 20px; border-bottom: 1px solid #32363a; }
 .details div { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 13px; color: #b6bbb6; }
 .details strong { color: #edf0ec; font-weight: 600; }.details strong.rate { color: #55dc9a; }
-nav { padding: 8px; } button { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; border-radius: 6px; background: transparent; color: #e6e9e5; cursor: pointer; padding: 9px 11px; font: inherit; font-size: 13px; text-align: left; }button:hover,button:focus-visible { outline: none; background: #2a2e32; }svg { width: 16px; height: 16px; fill: none; stroke: #abb1ab; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }.github { stroke-width: 1.6; }footer { padding: 8px; border-top: 1px solid #32363a; }.quit { color: #f2aaa1; }.quit svg { stroke: currentColor; }.quit:hover { background: #4a2928; }.hidden { display: none; }
+nav { padding: 6px; } button { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; border-radius: 7px; background: transparent; color: #e6e9e5; cursor: pointer; padding: 8px 11px; font: inherit; font-size: 13px; text-align: left; }button:hover,button:focus-visible { outline: none; background: #2a2e32; }svg { width: 16px; height: 16px; fill: none; stroke: #abb1ab; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; overflow: visible; }.github { fill: #abb1ab; stroke: none; }footer { padding: 6px; border-top: 1px solid #32363a; }.quit { color: #f2aaa1; }.quit svg { stroke: currentColor; }.quit:hover { background: #4a2928; }.hidden { display: none; }

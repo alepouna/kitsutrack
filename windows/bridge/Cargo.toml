@@ -13,10 +13,12 @@ os_info = "3.13"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "json"] }
 semver = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-tauri = { version = "2", features = ["tray-icon"] }
+serde_json = "1.0"
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
 time = { version = "0.3", features = ["formatting"] }
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 tauri-build = "2"

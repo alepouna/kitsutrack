@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     net::{TcpStream, UdpSocket},
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
     path::BaseDirectory,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
@@ -53,9 +53,12 @@ struct Args {
     invert_pitch: bool,
     #[arg(long)]
     invert_roll: bool,
+    /// Open the status panel with simulated tracking data instead of starting the bridge.
+    #[arg(long)]
+    preview: bool,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Level {
     Info,
@@ -63,18 +66,34 @@ enum Level {
     Error,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LogEntry {
+    id: u64,
+    session: String,
     timestamp: String,
     level: Level,
     message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogFileSummary {
+    session: String,
+    started_at: String,
+    size: u64,
+    entries: usize,
+    warnings: usize,
+    errors: usize,
+    current: bool,
 }
 
 struct Logger {
     entries: Mutex<Vec<LogEntry>>,
     file: Mutex<File>,
     session_dir: PathBuf,
-    settings: String,
+    session: String,
+    next_id: Mutex<u64>,
 }
 struct StatusItem {
     text: Mutex<String>,
@@ -100,8 +119,12 @@ fn main() {
         .plugin(tauri_plugin_positioner::init())
         .setup(move |app| Ok(setup(app.handle().clone(), args.clone())?))
         .invoke_handler(tauri::generate_handler![
-            logs,
-            export_logs,
+            log_files,
+            log_file,
+            export_all_logs,
+            reveal_log_file,
+            delete_log_file,
+            delete_all_log_files,
             menu_state,
             open_logs,
             open_about,
@@ -110,11 +133,6 @@ fn main() {
             open_update_command,
             quit,
         ])
-        .on_window_event(|window, event| {
-            if window.label() == "menu" && matches!(event, WindowEvent::Focused(false)) {
-                let _ = window.hide();
-            }
-        })
         .run(tauri::generate_context!())
         .expect("run KitsuTrack Bridge");
 }
@@ -133,7 +151,9 @@ fn setup(app: AppHandle, args: Args) -> Result<()> {
     app.manage(UpdateItem {
         url: Mutex::new(None),
     });
+    let icon = app_icon()?;
     TrayIconBuilder::new()
+        .icon(icon)
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left | MouseButton::Right,
@@ -152,13 +172,34 @@ fn setup(app: AppHandle, args: Args) -> Result<()> {
         Level::Info,
         format!("KitsuTrack Bridge {} started", env!("CARGO_PKG_VERSION")),
     );
-    let update_app = app.clone();
-    thread::spawn(move || {
-        if automatic_update_check_due(&update_app) {
-            check_updates(update_app, false);
-        }
-    });
-    thread::spawn(move || run_bridge(app, args));
+    if args.preview {
+        set_status(&app, "Connected / Tracking");
+        *app.state::<BridgeStats>()
+            .tracking_rate
+            .lock()
+            .expect("tracking rate lock") = Some(60);
+        log(&app, Level::Info, "USB tunnel connected to Aurora's iPhone");
+        log(
+            &app,
+            Level::Info,
+            "Forwarding tracking data to OpenTrack at 60 FPS",
+        );
+        log(
+            &app,
+            Level::Warning,
+            "Preview diagnostic: a delayed tracking frame was recovered",
+        );
+        show_menu(&app);
+        show_logs(&app);
+    } else {
+        let update_app = app.clone();
+        thread::spawn(move || {
+            if automatic_update_check_due(&update_app) {
+                check_updates(update_app, false);
+            }
+        });
+        thread::spawn(move || run_bridge(app, args));
+    }
     Ok(())
 }
 
@@ -377,16 +418,30 @@ fn show_logs(app: &AppHandle) {
 
 fn show_menu(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("menu") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+            return;
+        }
         let _ = window.show();
         let _ = window.set_focus();
         let _ = window.move_window_constrained(Position::TrayCenter);
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, "menu", WebviewUrl::App("menu.html".into()))
+    let Ok(icon) = app_icon() else {
+        return;
+    };
+    let Ok(builder) =
+        WebviewWindowBuilder::new(app, "menu", WebviewUrl::App("menu.html".into())).icon(icon)
+    else {
+        return;
+    };
+    let _ = builder
         .title("KitsuTrack Bridge")
-        .inner_size(340.0, 345.0)
+        .inner_size(360.0, 360.0)
         .resizable(false)
         .decorations(false)
+        .transparent(true)
+        .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false)
@@ -396,6 +451,12 @@ fn show_menu(app: &AppHandle) {
             window.show()?;
             window.set_focus()
         });
+}
+
+fn app_icon() -> tauri::Result<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(include_bytes!(
+        "../../../shared/assets/kitsutrack/icon-64.png"
+    ))
 }
 
 #[cfg(windows)]
@@ -579,35 +640,156 @@ fn show_temporary_status(app: &AppHandle, text: impl Into<String>) {
 }
 
 #[tauri::command]
-fn logs(logger: tauri::State<'_, Arc<Logger>>) -> Vec<LogEntry> {
-    logger.entries.lock().expect("log lock").clone()
+fn log_files(logger: tauri::State<'_, Arc<Logger>>) -> Vec<LogFileSummary> {
+    let mut files = fs::read_dir(&logger.session_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect::<Vec<_>>();
+    files.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
+    files
+        .into_iter()
+        .filter_map(|file| {
+            let session = file
+                .path()
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let entries = read_session(&file.path(), &session);
+            if entries.is_empty() {
+                return None;
+            }
+            Some(LogFileSummary {
+                started_at: entries
+                    .first()
+                    .map(|entry| entry.timestamp.clone())
+                    .unwrap_or_else(|| session.clone()),
+                size: file.metadata().map(|metadata| metadata.len()).unwrap_or(0),
+                warnings: entries
+                    .iter()
+                    .filter(|entry| matches!(entry.level, Level::Warning))
+                    .count(),
+                errors: entries
+                    .iter()
+                    .filter(|entry| matches!(entry.level, Level::Error))
+                    .count(),
+                entries: entries.len(),
+                current: session == logger.session,
+                session,
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
-fn export_logs(app: AppHandle) {
-    let logger = app.state::<Arc<Logger>>().inner().clone();
-    app.dialog()
-        .file()
-        .add_filter("Log file", &["log"])
-        .set_file_name("kitsutrack-bridge-logs.log")
-        .save_file(move |path| {
-            let Some(path) = path else {
-                return;
-            };
-            let text = export_text(&logger);
-            if let Err(error) = fs::write(path.as_path().expect("local file path"), text) {
-                log(
-                    &app,
-                    Level::Error,
-                    format!("Could not export logs: {error}"),
-                );
-            } else {
-                log(&app, Level::Info, "Logs exported");
-            }
-        });
+fn log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Vec<LogEntry> {
+    read_session(&logger.session_dir.join(format!("{session}.log")), &session)
 }
 
-fn create_logger(app: &AppHandle, args: &Args) -> Result<Logger> {
+#[tauri::command]
+fn export_all_logs(app: AppHandle) {
+    let logger = app.state::<Arc<Logger>>().inner().clone();
+    app.dialog().file().pick_folder(move |folder| {
+        let Some(folder) = folder.and_then(|path| path.as_path().map(PathBuf::from)) else {
+            return;
+        };
+        let destination = folder.join(format!("kitsutrack-bridge-logs-{}.zip", unix_millis()));
+        let Ok(file) = File::create(&destination) else {
+            return;
+        };
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let mut sessions = fs::read_dir(&logger.session_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .collect::<Vec<_>>();
+        sessions.sort_by_key(|entry| entry.file_name());
+        for session_file in sessions {
+            let session = session_file
+                .path()
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let entries = read_session(&session_file.path(), &session);
+            if archive
+                .start_file(format!("kitsutrack-{session}.log"), options)
+                .is_err()
+            {
+                continue;
+            }
+            for entry in entries {
+                let _ = writeln!(
+                    archive,
+                    "{} {:<7} {}",
+                    entry.timestamp,
+                    level_name(&entry.level),
+                    entry.message
+                );
+            }
+        }
+        let _ = archive.finish();
+    });
+}
+
+#[tauri::command]
+fn reveal_log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Result<(), String> {
+    let path = logger.session_dir.join(format!("{session}.log"));
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg("-R").arg(&path).spawn();
+    #[cfg(windows)]
+    let result = {
+        let mut command = Command::new("explorer.exe");
+        command.creation_flags(CREATE_NO_WINDOW);
+        command.arg(format!("/select,{}", path.display())).spawn()
+    };
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let result = Command::new("xdg-open").arg(&logger.session_dir).spawn();
+    result.map(|_| ()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Result<(), String> {
+    let path = logger.session_dir.join(format!("{session}.log"));
+    if session == logger.session {
+        let mut file = logger.file.lock().expect("log file lock");
+        file.set_len(0).map_err(|error| error.to_string())?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| error.to_string())?;
+        logger.entries.lock().expect("log lock").clear();
+    } else if path.exists() {
+        fs::remove_file(path).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_all_log_files(logger: tauri::State<'_, Arc<Logger>>) -> Result<(), String> {
+    for entry in fs::read_dir(&logger.session_dir)
+        .map_err(|error| error.to_string())?
+        .flatten()
+    {
+        if entry
+            .path()
+            .file_stem()
+            .is_some_and(|name| name == logger.session.as_str())
+        {
+            let mut file = logger.file.lock().expect("log file lock");
+            file.set_len(0).map_err(|error| error.to_string())?;
+            file.seek(SeekFrom::Start(0))
+                .map_err(|error| error.to_string())?;
+            logger.entries.lock().expect("log lock").clear();
+        } else {
+            fs::remove_file(entry.path()).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn create_logger(app: &AppHandle, _args: &Args) -> Result<Logger> {
     let session_dir = app
         .path()
         .resolve("sessions", BaseDirectory::AppLocalData)?;
@@ -617,79 +799,79 @@ fn create_logger(app: &AppHandle, args: &Args) -> Result<Logger> {
     for old in sessions.into_iter().rev().skip(9) {
         let _ = fs::remove_file(old.path());
     }
-    let started = unix_millis();
+    let session = unix_millis().to_string();
+    let file_path = session_dir.join(format!("{session}.log"));
     let file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(session_dir.join(format!("{started}.log")))?;
+        .open(&file_path)?;
     Ok(Logger {
         entries: Mutex::new(Vec::new()),
         file: Mutex::new(file),
         session_dir,
-        settings: format!(
-            "USB tunnel: {}\nOpenTrack: {}\nInversions: x={} y={} z={} yaw={} pitch={} roll={}",
-            args.source,
-            args.opentrack,
-            args.invert_x,
-            args.invert_y,
-            args.invert_z,
-            args.invert_yaw,
-            args.invert_pitch,
-            args.invert_roll,
-        ),
+        session,
+        next_id: Mutex::new(1),
     })
 }
 
 fn log(app: &AppHandle, level: Level, message: impl Into<String>) {
+    let logger = app.state::<Arc<Logger>>();
+    let mut next_id = logger.next_id.lock().expect("log id lock");
     let entry = LogEntry {
+        id: *next_id,
+        session: logger.session.clone(),
         timestamp: timestamp(),
         level,
         message: message.into(),
     };
-    let logger = app.state::<Arc<Logger>>();
-    let line = format!(
-        "{} {:<7} {}\n",
-        entry.timestamp,
-        match entry.level {
-            Level::Info => "INFO",
-            Level::Warning => "WARNING",
-            Level::Error => "ERROR",
-        },
-        entry.message
-    );
-    let _ = logger
-        .file
-        .lock()
-        .expect("log file lock")
-        .write_all(line.as_bytes());
+    *next_id += 1;
+    drop(next_id);
+    if let Ok(line) = serde_json::to_string(&entry) {
+        let _ = writeln!(logger.file.lock().expect("log file lock"), "{line}");
+    }
     logger.entries.lock().expect("log lock").push(entry.clone());
     let _ = app.emit("log", entry);
 }
 
-fn export_text(logger: &Logger) -> String {
-    let mut output = format!(
-        "KitsuTrack Bridge {}\nExported: {}\nWindows: {}\nArchitecture: {}\n{}\n\n",
-        env!("CARGO_PKG_VERSION"),
-        timestamp(),
-        os_info::get(),
-        env::consts::ARCH,
-        logger.settings
-    );
-    let mut sessions = fs::read_dir(&logger.session_dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .collect::<Vec<_>>();
-    sessions.sort_by_key(|entry| entry.file_name());
-    for session in sessions {
-        output.push_str(&format!(
-            "===== {} =====\n",
-            session.file_name().to_string_lossy()
-        ));
-        output.push_str(&fs::read_to_string(session.path()).unwrap_or_default());
-        output.push('\n');
+fn read_session(path: &std::path::Path, session: &str) -> Vec<LogEntry> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            serde_json::from_str(line)
+                .ok()
+                .or_else(|| parse_legacy_entry(line, session, index as u64 + 1))
+        })
+        .collect()
+}
+
+fn parse_legacy_entry(line: &str, session: &str, id: u64) -> Option<LogEntry> {
+    let mut parts = line
+        .splitn(3, char::is_whitespace)
+        .filter(|part| !part.is_empty());
+    let timestamp = parts.next()?.to_string();
+    let level = match parts.next()? {
+        "INFO" => Level::Info,
+        "WARNING" => Level::Warning,
+        "ERROR" => Level::Error,
+        _ => return None,
+    };
+    Some(LogEntry {
+        id,
+        session: session.into(),
+        timestamp,
+        level,
+        message: parts.next().unwrap_or_default().into(),
+    })
+}
+
+fn level_name(level: &Level) -> &'static str {
+    match level {
+        Level::Info => "INFO",
+        Level::Warning => "WARNING",
+        Level::Error => "ERROR",
     }
-    output
 }
 
 fn set_status(app: &AppHandle, status: &str) {
