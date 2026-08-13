@@ -9,6 +9,7 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\KitsuTrack
+DisableDirPage=no
 DefaultGroupName={#AppName}
 OutputDir=dist
 OutputBaseFilename=KitsuTrack-Windows-Setup-x64
@@ -20,6 +21,10 @@ PrivilegesRequired=lowest
 WizardStyle=modern
 LicenseFile=..\LICENSE
 UninstallDisplayIcon={app}\{#AppExeName}
+; Keep this ID stable: Inno Setup uses it to recognize an installed release
+; and install a newer package as an update rather than as a second app.
+CloseApplications=force
+RestartApplications=no
 
 [Files]
 Source: "dist\KitsuTrack\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

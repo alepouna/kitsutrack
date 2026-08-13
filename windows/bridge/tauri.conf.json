@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "KitsuTrack Bridge",
+  "version": "0.1.0",
+  "identifier": "com.kitsutrack.bridge",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "withGlobalTauri": true,
+    "windows": []
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "icon": [
+      "../../shared/assets/kitsutrack/icon.ico",
+      "../../shared/assets/kitsutrack/icon-1024.png"
+    ]
+  }
+}

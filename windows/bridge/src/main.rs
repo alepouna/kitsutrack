@@ -1,18 +1,35 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use iht_protocol::{FLAG_TRACKING, PACKET_SIZE, PosePacket, quaternion_to_degrees};
+use serde::{Deserialize, Serialize};
 use std::{
     env,
-    io::Read,
+    fs::{self, File, OpenOptions},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     net::{TcpStream, UdpSocket},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tauri::{
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+    path::BaseDirectory,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+};
+use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_positioner::{Position, WindowExt};
 
-#[derive(Parser)]
-#[command(about = "USB-tunnel to OpenTrack UDP bridge")]
+const REPOSITORY_URL: &str = "https://github.com/alepouna/kitsutrack";
+const ISSUE_URL: &str = "https://github.com/alepouna/kitsutrack/issues/new/choose";
+const RELEASE_URL: &str = "https://api.github.com/repos/alepouna/kitsutrack/releases/latest";
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+#[derive(Parser, Clone)]
+#[command(about = "KitsuTrack USB bridge for OpenTrack")]
 struct Args {
     #[arg(long, default_value = "127.0.0.1:4243")]
     source: String,
@@ -20,10 +37,8 @@ struct Args {
     opentrack: String,
     #[arg(long, default_value_t = 500)]
     stale_ms: u64,
-    /// Do not automatically start a USB forwarding helper.
     #[arg(long)]
     no_usb_helper: bool,
-    /// Explicit go-ios `ios.exe` or iproxy executable.
     #[arg(long)]
     usb_tool: Option<PathBuf>,
     #[arg(long)]
@@ -38,29 +53,900 @@ struct Args {
     invert_pitch: bool,
     #[arg(long)]
     invert_roll: bool,
+    /// Open the status panel with simulated tracking data instead of starting the bridge.
+    #[arg(long)]
+    preview: bool,
 }
 
-fn main() -> Result<()> {
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Level {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LogEntry {
+    id: u64,
+    session: String,
+    timestamp: String,
+    level: Level,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogFileSummary {
+    session: String,
+    started_at: String,
+    size: u64,
+    entries: usize,
+    warnings: usize,
+    errors: usize,
+    current: bool,
+}
+
+struct Logger {
+    file: Mutex<File>,
+    session_dir: PathBuf,
+    session: String,
+    next_id: Mutex<u64>,
+}
+struct StatusItem {
+    text: Mutex<String>,
+}
+struct BridgeStats {
+    tracking_rate: Mutex<Option<u32>>,
+}
+struct UpdateItem {
+    url: Mutex<Option<String>>,
+}
+struct ChildProcess(Mutex<Option<Child>>);
+
+#[derive(Deserialize)]
+struct Release {
+    tag_name: String,
+    html_url: String,
+}
+
+fn main() {
     let args = Args::parse();
-    verify_windows_usbmux(&args)?;
-    let mut usb_tunnel = start_usb_tunnel(&args);
-    let udp = UdpSocket::bind("127.0.0.1:0").context("bind UDP output")?;
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_positioner::init())
+        .setup(move |app| Ok(setup(app.handle().clone(), args.clone())?))
+        .invoke_handler(tauri::generate_handler![
+            log_files,
+            log_file,
+            export_all_logs,
+            reveal_log_file,
+            delete_log_file,
+            delete_all_log_files,
+            menu_state,
+            open_logs,
+            open_about,
+            report_feedback,
+            check_for_updates,
+            open_update_command,
+            quit,
+        ])
+        .run(tauri::generate_context!())
+        .expect("run KitsuTrack Bridge");
+}
+
+fn setup(app: AppHandle, args: Args) -> Result<()> {
+    let logger = Arc::new(create_logger(&app, &args)?);
+    app.manage(logger.clone());
+    app.manage(ChildProcess(Mutex::new(None)));
+
+    app.manage(StatusItem {
+        text: Mutex::new("Disconnected".into()),
+    });
+    app.manage(BridgeStats {
+        tracking_rate: Mutex::new(None),
+    });
+    app.manage(UpdateItem {
+        url: Mutex::new(None),
+    });
+    let icon = app_icon()?;
+    TrayIconBuilder::new()
+        .icon(icon)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left | MouseButton::Right,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
+                show_menu(tray.app_handle());
+            }
+        })
+        .build(&app)?;
+
+    log(
+        &app,
+        Level::Info,
+        format!("KitsuTrack Bridge {} started", env!("CARGO_PKG_VERSION")),
+    );
+    if args.preview {
+        set_status(&app, "Connected / Tracking");
+        *app.state::<BridgeStats>()
+            .tracking_rate
+            .lock()
+            .expect("tracking rate lock") = Some(60);
+        log(&app, Level::Info, "USB tunnel connected to Aurora's iPhone");
+        log(
+            &app,
+            Level::Info,
+            "Forwarding tracking data to OpenTrack at 60 FPS",
+        );
+        log(
+            &app,
+            Level::Warning,
+            "Preview diagnostic: a delayed tracking frame was recovered",
+        );
+        show_menu(&app);
+        show_logs(&app);
+    } else {
+        let update_app = app.clone();
+        thread::spawn(move || {
+            if automatic_update_check_due(&update_app) {
+                check_updates(update_app, false);
+            }
+        });
+        thread::spawn(move || run_bridge(app, args));
+    }
+    Ok(())
+}
+
+fn run_bridge(app: AppHandle, args: Args) {
+    if let Err(error) = verify_windows_usbmux(&args) {
+        set_status(&app, "Disconnected");
+        log(&app, Level::Error, format!("{error:#}"));
+        return;
+    }
     loop {
-        if usb_tunnel
-            .as_mut()
-            .is_some_and(|child| child.try_wait().ok().flatten().is_some())
-        {
-            eprintln!("USB tunnel stopped; restarting it");
-            usb_tunnel = start_usb_tunnel(&args);
-            thread::sleep(Duration::from_secs(1));
+        start_helper(&app, &args);
+        set_status(&app, "Disconnected");
+        *app.state::<BridgeStats>()
+            .tracking_rate
+            .lock()
+            .expect("tracking rate lock") = None;
+        log(
+            &app,
+            Level::Info,
+            format!("Connecting to USB tunnel at {}", args.source),
+        );
+        match forward(&app, &args) {
+            Ok(()) => log(&app, Level::Warning, "Tracker disconnected"),
+            Err(error) => log(&app, Level::Warning, format!("Connection error: {error:#}")),
         }
-        eprintln!("connecting to USB tunnel at {}", args.source);
-        match forward(&args, &udp) {
-            Ok(()) => eprintln!("tracker disconnected"),
-            Err(error) => eprintln!("connection error: {error:#}"),
-        }
+        set_status(&app, "Disconnected");
+        *app.state::<BridgeStats>()
+            .tracking_rate
+            .lock()
+            .expect("tracking rate lock") = None;
         thread::sleep(Duration::from_secs(1));
     }
+}
+
+fn forward(app: &AppHandle, args: &Args) -> Result<()> {
+    let udp = UdpSocket::bind("127.0.0.1:0").context("bind UDP output")?;
+    let mut tcp = TcpStream::connect(&args.source).context("connect to USB forwarding helper")?;
+    tcp.set_read_timeout(Some(Duration::from_millis(args.stale_ms)))?;
+    tcp.set_nodelay(true)?;
+    set_status(app, "Connected / Waiting for Tracking Data");
+    log(
+        app,
+        Level::Info,
+        "USB tunnel connected; waiting for iPhone tracking data",
+    );
+    let mut wire = [0_u8; PACKET_SIZE];
+    let mut last_sequence = None;
+    let mut forwarding = false;
+    let mut rate_started = Instant::now();
+    let mut rate_count = 0_u32;
+    loop {
+        tcp.read_exact(&mut wire)
+            .context("no tracking packets received")?;
+        let packet = match PosePacket::decode(&wire) {
+            Ok(packet) => packet,
+            Err(error) => {
+                log(
+                    app,
+                    Level::Warning,
+                    format!("Discarded malformed packet: {error:?}"),
+                );
+                continue;
+            }
+        };
+        if last_sequence.is_some_and(|last| packet.sequence <= last) {
+            continue;
+        }
+        last_sequence = Some(packet.sequence);
+        if packet.flags & FLAG_TRACKING == 0 {
+            continue;
+        }
+        if !forwarding {
+            forwarding = true;
+            set_status(app, "Connected / Tracking");
+            log(
+                app,
+                Level::Info,
+                format!("Forwarding to OpenTrack at {}", args.opentrack),
+            );
+        }
+        rate_count += 1;
+        if rate_started.elapsed() >= Duration::from_secs(1) {
+            *app.state::<BridgeStats>()
+                .tracking_rate
+                .lock()
+                .expect("tracking rate lock") = Some(rate_count);
+            let _ = app.emit("menu-state", menu_state(app.clone()));
+            rate_started = Instant::now();
+            rate_count = 0;
+        }
+        let angles = quaternion_to_degrees(packet.rotation);
+        let mut values = [
+            packet.translation[0] as f64 * 100.0,
+            packet.translation[1] as f64 * 100.0,
+            packet.translation[2] as f64 * 100.0,
+            angles[0],
+            angles[1],
+            angles[2],
+        ];
+        for (value, invert) in values.iter_mut().zip([
+            args.invert_x,
+            args.invert_y,
+            args.invert_z,
+            args.invert_yaw,
+            args.invert_pitch,
+            args.invert_roll,
+        ]) {
+            if invert {
+                *value = -*value;
+            }
+        }
+        let mut datagram = [0_u8; 48];
+        for (i, value) in values.iter().enumerate() {
+            datagram[i * 8..i * 8 + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        udp.send_to(&datagram, &args.opentrack)
+            .context("send OpenTrack UDP")?;
+    }
+}
+
+fn start_helper(app: &AppHandle, args: &Args) {
+    let child_process = app.state::<ChildProcess>();
+    let mut child_slot = child_process.0.lock().expect("helper lock");
+    if child_slot
+        .as_mut()
+        .is_some_and(|child| child.try_wait().ok().flatten().is_none())
+    {
+        return;
+    }
+    *child_slot = None;
+    if args.no_usb_helper || args.source != "127.0.0.1:4243" {
+        return;
+    }
+    let Some(executable) = args.usb_tool.clone().or_else(find_usb_tool) else {
+        log(
+            app,
+            Level::Warning,
+            "USB forwarding tool was not found; tracker simulator can still be used",
+        );
+        return;
+    };
+    let is_go_ios = executable
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("ios.exe"));
+    let arguments: &[&str] = if is_go_ios {
+        &["forward", "4243", "4243"]
+    } else {
+        &["4243", "4243"]
+    };
+    let mut command = Command::new(&executable);
+    command
+        .args(arguments)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    match command.spawn() {
+        Ok(mut child) => {
+            if let Some(stdout) = child.stdout.take() {
+                relay_helper_output(app.clone(), stdout, "USB helper");
+            }
+            if let Some(stderr) = child.stderr.take() {
+                relay_helper_output(app.clone(), stderr, "USB helper");
+            }
+            log(
+                app,
+                Level::Info,
+                format!("Started USB forwarding using {}", executable.display()),
+            );
+            *child_slot = Some(child);
+        }
+        Err(error) => log(
+            app,
+            Level::Error,
+            format!("Could not start USB forwarding helper: {error}"),
+        ),
+    }
+}
+
+fn relay_helper_output<R: Read + Send + 'static>(app: AppHandle, output: R, label: &'static str) {
+    thread::spawn(move || {
+        for line in BufReader::new(output)
+            .lines()
+            .map_while(std::result::Result::ok)
+        {
+            log(&app, Level::Info, format!("{label}: {line}"));
+        }
+    });
+}
+
+fn stop_helper(app: &AppHandle) {
+    if let Some(mut child) = app
+        .state::<ChildProcess>()
+        .0
+        .lock()
+        .expect("helper lock")
+        .take()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+fn show_logs(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("logs") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "logs", WebviewUrl::App("index.html".into()))
+        .title("KitsuTrack Bridge Logs")
+        .inner_size(820.0, 540.0)
+        .min_inner_size(560.0, 320.0)
+        .build();
+}
+
+fn show_menu(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("menu") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+            return;
+        }
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.move_window_constrained(Position::TrayCenter);
+        return;
+    }
+    let Ok(icon) = app_icon() else {
+        return;
+    };
+    let Ok(builder) =
+        WebviewWindowBuilder::new(app, "menu", WebviewUrl::App("menu.html".into())).icon(icon)
+    else {
+        return;
+    };
+    let _ = builder
+        .title("KitsuTrack Bridge")
+        .inner_size(360.0, 360.0)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .build()
+        .and_then(|window| {
+            window.move_window_constrained(Position::TrayCenter)?;
+            window.show()?;
+            window.set_focus()
+        });
+}
+
+fn app_icon() -> tauri::Result<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(include_bytes!(
+        "../../../shared/assets/kitsutrack/icon-64.png"
+    ))
+}
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+fn show_about(app: &AppHandle) {
+    app.dialog()
+        .message(format!(
+            "KitsuTrack Bridge {}\n\n{REPOSITORY_URL}",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .title("About KitsuTrack")
+        .show(|_| {});
+}
+
+fn check_updates(app: AppHandle, manual: bool) {
+    thread::spawn(move || match latest_release() {
+        Ok(release) => {
+            let _ = fs::write(update_check_path(&app), unix_millis().to_string());
+            if is_newer_release(&release.tag_name) {
+                let update = app.state::<UpdateItem>();
+                *update.url.lock().expect("update lock") = Some(release.html_url);
+                let _ = app.emit("menu-state", menu_state(app.clone()));
+                log(
+                    &app,
+                    Level::Info,
+                    format!("Update available: {}", release.tag_name),
+                );
+                let _ = manual;
+            } else if manual {
+                log(&app, Level::Info, "KitsuTrack Bridge is up to date");
+            } else {
+                log(
+                    &app,
+                    Level::Info,
+                    "Update check completed; bridge is up to date",
+                );
+            }
+        }
+        Err(error) => {
+            log(
+                &app,
+                Level::Warning,
+                format!("Update check failed: {error:#}"),
+            );
+        }
+    });
+}
+
+fn latest_release() -> Result<Release> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent(format!("KitsuTrack-Bridge/{}", env!("CARGO_PKG_VERSION")))
+        .build()?
+        .get(RELEASE_URL)
+        .send()?
+        .error_for_status()?
+        .json()
+        .context("parse GitHub release response")
+}
+
+fn is_newer_release(tag: &str) -> bool {
+    let Ok(latest) = semver::Version::parse(tag.trim_start_matches('v')) else {
+        return false;
+    };
+    let installed =
+        semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("package version is semver");
+    latest > installed
+}
+
+fn update_check_path(app: &AppHandle) -> PathBuf {
+    app.path()
+        .resolve("last-update-check", BaseDirectory::AppLocalData)
+        .expect("resolve update check path")
+}
+
+fn automatic_update_check_due(app: &AppHandle) -> bool {
+    fs::read_to_string(update_check_path(app))
+        .ok()
+        .and_then(|text| text.trim().parse::<u128>().ok())
+        .is_none_or(|last_check| {
+            unix_millis().saturating_sub(last_check) >= UPDATE_CHECK_INTERVAL.as_millis()
+        })
+}
+
+fn open_update(app: &AppHandle) {
+    let update = app.state::<UpdateItem>();
+    if let Some(url) = update.url.lock().expect("update lock").as_deref() {
+        let _ = open::that(url);
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct MenuState {
+    status: String,
+    iphone: String,
+    tracking_rate: Option<u32>,
+    update_available: bool,
+}
+
+#[tauri::command]
+fn menu_state(app: AppHandle) -> MenuState {
+    MenuState {
+        status: app
+            .state::<StatusItem>()
+            .text
+            .lock()
+            .expect("status lock")
+            .clone(),
+        iphone: "iPhone connected".into(),
+        tracking_rate: *app
+            .state::<BridgeStats>()
+            .tracking_rate
+            .lock()
+            .expect("tracking rate lock"),
+        update_available: app
+            .state::<UpdateItem>()
+            .url
+            .lock()
+            .expect("update lock")
+            .is_some(),
+    }
+}
+
+#[tauri::command]
+fn open_logs(app: AppHandle) {
+    show_logs(&app);
+}
+
+#[tauri::command]
+fn open_about(app: AppHandle) {
+    show_about(&app);
+}
+
+#[tauri::command]
+fn report_feedback() {
+    let _ = open::that(ISSUE_URL);
+}
+
+#[tauri::command]
+fn check_for_updates(app: AppHandle) {
+    check_updates(app, true);
+}
+
+#[tauri::command]
+fn open_update_command(app: AppHandle) {
+    open_update(&app);
+}
+
+#[tauri::command]
+fn quit(app: AppHandle) {
+    stop_helper(&app);
+    app.exit(0);
+}
+
+#[tauri::command]
+fn log_files(logger: tauri::State<'_, Arc<Logger>>) -> Vec<LogFileSummary> {
+    let mut files = fs::read_dir(&logger.session_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect::<Vec<_>>();
+    files.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
+    files
+        .into_iter()
+        .filter_map(|file| {
+            let session = file
+                .path()
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if !valid_session(&session) || !file.file_type().ok()?.is_file() {
+                return None;
+            }
+            let entries = read_session(&file.path(), &session);
+            if entries.is_empty() {
+                return None;
+            }
+            Some(LogFileSummary {
+                started_at: entries
+                    .first()
+                    .map(|entry| entry.timestamp.clone())
+                    .unwrap_or_else(|| session.clone()),
+                size: file.metadata().map(|metadata| metadata.len()).unwrap_or(0),
+                warnings: entries
+                    .iter()
+                    .filter(|entry| matches!(entry.level, Level::Warning))
+                    .count(),
+                errors: entries
+                    .iter()
+                    .filter(|entry| matches!(entry.level, Level::Error))
+                    .count(),
+                entries: entries.len(),
+                current: session == logger.session,
+                session,
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Vec<LogEntry> {
+    if !valid_session(&session) {
+        return Vec::new();
+    }
+    read_session(&session_path(&logger.session_dir, &session), &session)
+}
+
+#[tauri::command]
+fn export_all_logs(app: AppHandle) {
+    let logger = app.state::<Arc<Logger>>().inner().clone();
+    app.dialog().file().pick_folder(move |folder| {
+        let Some(folder) = folder.and_then(|path| path.as_path().map(PathBuf::from)) else {
+            return;
+        };
+        let destination = folder.join(format!("kitsutrack-bridge-logs-{}.zip", unix_millis()));
+        let Ok(file) = File::create(&destination) else {
+            log(
+                &app,
+                Level::Error,
+                format!("Could not create log archive {}", destination.display()),
+            );
+            return;
+        };
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let mut sessions = fs::read_dir(&logger.session_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_type()
+                    .map(|kind| kind.is_file())
+                    .unwrap_or(false)
+                    && entry.path().extension().and_then(|ext| ext.to_str()) == Some("log")
+                    && entry
+                        .path()
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .is_some_and(valid_session)
+            })
+            .collect::<Vec<_>>();
+        sessions.sort_by_key(|entry| entry.file_name());
+        for session_file in sessions {
+            let session = session_file
+                .path()
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if !valid_session(&session)
+                || !session_file
+                    .file_type()
+                    .map(|kind| !kind.is_file())
+                    .unwrap_or(true)
+            {
+                continue;
+            }
+            let entries = read_session(&session_file.path(), &session);
+            if let Err(error) = archive.start_file(format!("kitsutrack-{session}.log"), options) {
+                log(
+                    &app,
+                    Level::Error,
+                    format!("Could not add {session} to log archive: {error}"),
+                );
+                continue;
+            }
+            for entry in entries {
+                if let Err(error) = writeln!(
+                    archive,
+                    "{} {:<7} {}",
+                    entry.timestamp,
+                    level_name(&entry.level),
+                    entry.message
+                ) {
+                    log(
+                        &app,
+                        Level::Error,
+                        format!("Could not write {session} to log archive: {error}"),
+                    );
+                    break;
+                }
+            }
+        }
+        if let Err(error) = archive.finish() {
+            log(
+                &app,
+                Level::Error,
+                format!("Could not finalize log archive: {error}"),
+            );
+        } else {
+            log(
+                &app,
+                Level::Info,
+                format!("Exported logs to {}", destination.display()),
+            );
+        }
+    });
+}
+
+#[tauri::command]
+fn reveal_log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Result<(), String> {
+    let path = validated_session_path(&logger.session_dir, &session)?;
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg("-R").arg(&path).spawn();
+    #[cfg(windows)]
+    let result = {
+        let mut command = Command::new("explorer.exe");
+        command.creation_flags(CREATE_NO_WINDOW);
+        command.arg(format!("/select,{}", path.display())).spawn()
+    };
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let result = Command::new("xdg-open").arg(&logger.session_dir).spawn();
+    result.map(|_| ()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_log_file(logger: tauri::State<'_, Arc<Logger>>, session: String) -> Result<(), String> {
+    let path = validated_session_path(&logger.session_dir, &session)?;
+    if session == logger.session {
+        let mut file = logger.file.lock().expect("log file lock");
+        file.set_len(0).map_err(|error| error.to_string())?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| error.to_string())?;
+    } else if path.exists() {
+        fs::remove_file(path).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_all_log_files(logger: tauri::State<'_, Arc<Logger>>) -> Result<(), String> {
+    for entry in fs::read_dir(&logger.session_dir)
+        .map_err(|error| error.to_string())?
+        .flatten()
+    {
+        if !entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_file()
+            || entry.path().extension().and_then(|ext| ext.to_str()) != Some("log")
+        {
+            continue;
+        }
+        if entry
+            .path()
+            .file_stem()
+            .is_some_and(|name| name == logger.session.as_str())
+        {
+            let mut file = logger.file.lock().expect("log file lock");
+            file.set_len(0).map_err(|error| error.to_string())?;
+            file.seek(SeekFrom::Start(0))
+                .map_err(|error| error.to_string())?;
+        } else {
+            fs::remove_file(entry.path()).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn create_logger(app: &AppHandle, _args: &Args) -> Result<Logger> {
+    let session_dir = app
+        .path()
+        .resolve("sessions", BaseDirectory::AppLocalData)?;
+    fs::create_dir_all(&session_dir)?;
+    let mut sessions = fs::read_dir(&session_dir)?
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_type()
+                .map(|kind| kind.is_file())
+                .unwrap_or(false)
+                && entry.path().extension().and_then(|ext| ext.to_str()) == Some("log")
+                && entry
+                    .path()
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(valid_session)
+        })
+        .collect::<Vec<_>>();
+    sessions.sort_by_key(|entry| entry.file_name());
+    for old in sessions.into_iter().rev().skip(9) {
+        let _ = fs::remove_file(old.path());
+    }
+    let session = unix_millis().to_string();
+    let file_path = session_dir.join(format!("{session}.log"));
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file_path)?;
+    Ok(Logger {
+        file: Mutex::new(file),
+        session_dir,
+        session,
+        next_id: Mutex::new(1),
+    })
+}
+
+fn log(app: &AppHandle, level: Level, message: impl Into<String>) {
+    let logger = app.state::<Arc<Logger>>();
+    let mut next_id = logger.next_id.lock().expect("log id lock");
+    let entry = LogEntry {
+        id: *next_id,
+        session: logger.session.clone(),
+        timestamp: timestamp(),
+        level,
+        message: message.into(),
+    };
+    *next_id += 1;
+    drop(next_id);
+    if let Ok(line) = serde_json::to_string(&entry) {
+        let _ = writeln!(logger.file.lock().expect("log file lock"), "{line}");
+    }
+    let _ = app.emit("log", entry);
+}
+
+fn read_session(path: &std::path::Path, session: &str) -> Vec<LogEntry> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            serde_json::from_str(line)
+                .ok()
+                .or_else(|| parse_legacy_entry(line, session, index as u64 + 1))
+        })
+        .collect()
+}
+
+fn valid_session(session: &str) -> bool {
+    !session.is_empty() && session.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn session_path(session_dir: &std::path::Path, session: &str) -> PathBuf {
+    session_dir.join(format!("{session}.log"))
+}
+
+fn validated_session_path(session_dir: &std::path::Path, session: &str) -> Result<PathBuf, String> {
+    valid_session(session)
+        .then(|| session_path(session_dir, session))
+        .ok_or_else(|| "Invalid log session".to_string())
+}
+
+fn parse_legacy_entry(line: &str, session: &str, id: u64) -> Option<LogEntry> {
+    let mut parts = line
+        .splitn(3, char::is_whitespace)
+        .filter(|part| !part.is_empty());
+    let timestamp = parts.next()?.to_string();
+    let level = match parts.next()? {
+        "INFO" => Level::Info,
+        "WARNING" => Level::Warning,
+        "ERROR" => Level::Error,
+        _ => return None,
+    };
+    Some(LogEntry {
+        id,
+        session: session.into(),
+        timestamp,
+        level,
+        message: parts.next().unwrap_or_default().into(),
+    })
+}
+
+fn level_name(level: &Level) -> &'static str {
+    match level {
+        Level::Info => "INFO",
+        Level::Warning => "WARNING",
+        Level::Error => "ERROR",
+    }
+}
+
+fn set_status(app: &AppHandle, status: &str) {
+    let item = app.state::<StatusItem>();
+    *item.text.lock().expect("status lock") = status.into();
+    let _ = app.emit("menu-state", menu_state(app.clone()));
+}
+fn unix_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+fn timestamp() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| unix_millis().to_string())
 }
 
 fn verify_windows_usbmux(args: &Args) -> Result<()> {
@@ -74,114 +960,6 @@ fn verify_windows_usbmux(args: &Args) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn forward(args: &Args, udp: &UdpSocket) -> Result<()> {
-    let mut tcp = TcpStream::connect(&args.source).context("connect to USB forwarding helper")?;
-    tcp.set_read_timeout(Some(Duration::from_millis(args.stale_ms)))?;
-    tcp.set_nodelay(true)?;
-    eprintln!("USB tunnel accepted the connection; waiting for iPhone tracking data");
-    let mut wire = [0_u8; PACKET_SIZE];
-    let mut last_sequence = None;
-    let started = Instant::now();
-    let mut count = 0_u64;
-    let mut stream_active = false;
-    loop {
-        tcp.read_exact(&mut wire).context(
-            "no tracking packets received (keep the iPhone app open and check the USB helper output)",
-        )?;
-        let packet = match PosePacket::decode(&wire) {
-            Ok(packet) => packet,
-            Err(error) => {
-                eprintln!("discarded malformed packet: {error:?}");
-                continue;
-            }
-        };
-        if !stream_active {
-            eprintln!(
-                "iPhone tracking stream active; forwarding to OpenTrack at {}",
-                args.opentrack
-            );
-            stream_active = true;
-        }
-        if last_sequence.is_some_and(|last| packet.sequence <= last) {
-            continue;
-        }
-        last_sequence = Some(packet.sequence);
-        if packet.flags & FLAG_TRACKING == 0 {
-            continue;
-        }
-        let angles = quaternion_to_degrees(packet.rotation);
-        let mut values = [
-            packet.translation[0] as f64 * 100.0,
-            packet.translation[1] as f64 * 100.0,
-            packet.translation[2] as f64 * 100.0,
-            angles[0],
-            angles[1],
-            angles[2],
-        ];
-        let inversions = [
-            args.invert_x,
-            args.invert_y,
-            args.invert_z,
-            args.invert_yaw,
-            args.invert_pitch,
-            args.invert_roll,
-        ];
-        for (value, invert) in values.iter_mut().zip(inversions) {
-            if invert {
-                *value = -*value;
-            }
-        }
-        let mut datagram = [0_u8; 48];
-        for (i, value) in values.iter().enumerate() {
-            datagram[i * 8..i * 8 + 8].copy_from_slice(&value.to_le_bytes());
-        }
-        udp.send_to(&datagram, &args.opentrack)
-            .context("send OpenTrack UDP")?;
-        count += 1;
-        if count.is_multiple_of(120) {
-            let hz = count as f64 / started.elapsed().as_secs_f64();
-            eprintln!(
-                "{hz:.1} Hz | xyz cm [{:.1}, {:.1}, {:.1}] | ypr° [{:.1}, {:.1}, {:.1}]",
-                values[0], values[1], values[2], values[3], values[4], values[5]
-            );
-        }
-    }
-}
-
-fn start_usb_tunnel(args: &Args) -> Option<Child> {
-    if args.no_usb_helper || args.source != "127.0.0.1:4243" {
-        return None;
-    }
-    let executable = args.usb_tool.clone().or_else(find_usb_tool);
-    let Some(executable) = executable else {
-        eprintln!("USB forwarding tool was not found; continuing so tracker-sim can be used");
-        return None;
-    };
-    let is_go_ios = executable
-        .file_name()
-        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("ios.exe"));
-    let arguments: &[&str] = if is_go_ios {
-        &["forward", "4243", "4243"]
-    } else {
-        &["4243", "4243"]
-    };
-    match Command::new(&executable)
-        .args(arguments)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-    {
-        Ok(child) => {
-            eprintln!("started USB forwarding using {}", executable.display());
-            Some(child)
-        }
-        Err(error) => {
-            eprintln!("could not start USB forwarding helper: {error}");
-            None
-        }
-    }
 }
 
 fn find_usb_tool() -> Option<PathBuf> {
@@ -202,7 +980,7 @@ fn find_usb_tool() -> Option<PathBuf> {
         for directory in env::split_paths(&path) {
             for name in names {
                 let candidate = directory.join(name);
-                if Path::new(&candidate).is_file() {
+                if candidate.is_file() {
                     return Some(candidate);
                 }
             }
