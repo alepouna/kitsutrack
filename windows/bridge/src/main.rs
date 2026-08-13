@@ -676,6 +676,11 @@ fn export_all_logs(app: AppHandle) {
         };
         let destination = folder.join(format!("kitsutrack-bridge-logs-{}.zip", unix_millis()));
         let Ok(file) = File::create(&destination) else {
+            log(
+                &app,
+                Level::Error,
+                format!("Could not create log archive {}", destination.display()),
+            );
             return;
         };
         let mut archive = zip::ZipWriter::new(file);
@@ -715,23 +720,44 @@ fn export_all_logs(app: AppHandle) {
                 continue;
             }
             let entries = read_session(&session_file.path(), &session);
-            if archive
-                .start_file(format!("kitsutrack-{session}.log"), options)
-                .is_err()
-            {
+            if let Err(error) = archive.start_file(format!("kitsutrack-{session}.log"), options) {
+                log(
+                    &app,
+                    Level::Error,
+                    format!("Could not add {session} to log archive: {error}"),
+                );
                 continue;
             }
             for entry in entries {
-                let _ = writeln!(
+                if let Err(error) = writeln!(
                     archive,
                     "{} {:<7} {}",
                     entry.timestamp,
                     level_name(&entry.level),
                     entry.message
-                );
+                ) {
+                    log(
+                        &app,
+                        Level::Error,
+                        format!("Could not write {session} to log archive: {error}"),
+                    );
+                    break;
+                }
             }
         }
-        let _ = archive.finish();
+        if let Err(error) = archive.finish() {
+            log(
+                &app,
+                Level::Error,
+                format!("Could not finalize log archive: {error}"),
+            );
+        } else {
+            log(
+                &app,
+                Level::Info,
+                format!("Exported logs to {}", destination.display()),
+            );
+        }
     });
 }
 
