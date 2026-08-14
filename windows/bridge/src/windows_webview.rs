@@ -26,6 +26,7 @@ const RECREATE_DELAY: Duration = Duration::from_millis(100);
 pub fn install_process_failed_recovery(window: &WebviewWindow) {
     let app = window.app_handle().clone();
     let label = window.label().to_string();
+    let result_label = label.clone();
     let result_app = app.clone();
     let result = window.with_webview(move |platform| {
         let webview = match unsafe { platform.controller().CoreWebView2() } {
@@ -87,7 +88,7 @@ pub fn install_process_failed_recovery(window: &WebviewWindow) {
         super::log(
             &result_app,
             super::Level::Warning,
-            format!("WebView2 {label}: unable to access native webview: {error}"),
+            format!("WebView2 {result_label}: unable to access native webview: {error}"),
         );
     }
 }
