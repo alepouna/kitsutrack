@@ -21,3 +21,6 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 tauri-build = "2"
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
