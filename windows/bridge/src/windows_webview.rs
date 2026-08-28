@@ -32,10 +32,9 @@ pub fn install_process_failed_recovery(window: &WebviewWindow) {
         let webview = match unsafe { platform.controller().CoreWebView2() } {
             Ok(webview) => webview,
             Err(error) => {
-                super::log(
+                super::write_webview_diagnostic(
                     &app,
-                    super::Level::Warning,
-                    format!("WebView2 {label}: unable to access CoreWebView2: {error}"),
+                    &format!("WebView2 {label}: unable to access CoreWebView2: {error}"),
                 );
                 return;
             }
@@ -53,14 +52,12 @@ pub fn install_process_failed_recovery(window: &WebviewWindow) {
                         .map(|()| kind.0)
                 })
                 .unwrap_or(-1);
-            super::log(
+            super::write_webview_diagnostic(
                 &handler_app,
-                super::Level::Error,
-                format!(
+                &format!(
                     "WebView2 {handler_label} process failed (kind {kind}); attempting recovery"
                 ),
             );
-
             let reload_succeeded = RELOADABLE_FAILURES.contains(&kind)
                 && sender
                     .as_ref()
@@ -76,19 +73,17 @@ pub fn install_process_failed_recovery(window: &WebviewWindow) {
 
         let mut token = 0i64;
         if let Err(error) = unsafe { webview.add_ProcessFailed(&handler, &mut token) } {
-            super::log(
+            super::write_webview_diagnostic(
                 &app,
-                super::Level::Warning,
-                format!("WebView2 {label}: unable to install ProcessFailed handler: {error}"),
+                &format!("WebView2 {label}: unable to install ProcessFailed handler: {error}"),
             );
         }
     });
 
     if let Err(error) = result {
-        super::log(
+        super::write_webview_diagnostic(
             &result_app,
-            super::Level::Warning,
-            format!("WebView2 {result_label}: unable to access native webview: {error}"),
+            &format!("WebView2 {result_label}: unable to access native webview: {error}"),
         );
     }
 }

@@ -10,7 +10,7 @@ use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     net::{TcpStream, UdpSocket},
     panic::{self, AssertUnwindSafe},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex, MutexGuard},
     thread,
@@ -31,6 +31,7 @@ const REPOSITORY_URL: &str = "https://github.com/alepouna/kitsutrack";
 const ISSUE_URL: &str = "https://github.com/alepouna/kitsutrack/issues/new/choose";
 const RELEASE_URL: &str = "https://api.github.com/repos/alepouna/kitsutrack/releases/latest";
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const DATA_DIRECTORY: &str = "KitsuTrack";
 
 #[derive(Parser, Clone)]
 #[command(about = "KitsuTrack USB bridge for OpenTrack")]
@@ -683,7 +684,10 @@ fn is_newer_release(tag: &str) -> bool {
 
 fn update_check_path(app: &AppHandle) -> Result<PathBuf> {
     app.path()
-        .resolve("last-update-check", BaseDirectory::AppLocalData)
+        .resolve(
+            format!("{DATA_DIRECTORY}/last-update-check"),
+            BaseDirectory::LocalData,
+        )
         .context("resolve update check path")
 }
 
@@ -996,10 +1000,12 @@ fn delete_all_log_files(logger: tauri::State<'_, Arc<Logger>>) -> Result<(), Str
 }
 
 fn create_logger(app: &AppHandle, _args: &Args) -> Result<Logger> {
-    let session_dir = app
-        .path()
-        .resolve("sessions", BaseDirectory::AppLocalData)?;
+    let session_dir = app.path().resolve(
+        format!("{DATA_DIRECTORY}/sessions"),
+        BaseDirectory::LocalData,
+    )?;
     fs::create_dir_all(&session_dir)?;
+    migrate_legacy_logs(app, &session_dir);
     let mut sessions = fs::read_dir(&session_dir)?
         .flatten()
         .filter(|entry| {
@@ -1031,6 +1037,42 @@ fn create_logger(app: &AppHandle, _args: &Args) -> Result<Logger> {
         session,
         next_id: Mutex::new(1),
     })
+}
+
+fn migrate_legacy_logs(app: &AppHandle, session_dir: &Path) {
+    let Ok(legacy_dir) = app.path().resolve("sessions", BaseDirectory::AppLocalData) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(&legacy_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(session) = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|session| valid_session(session))
+        else {
+            continue;
+        };
+        if path.extension().and_then(|extension| extension.to_str()) != Some("log")
+            || !entry
+                .file_type()
+                .map(|kind| kind.is_file())
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        let destination = session_path(session_dir, session);
+        if destination.exists() {
+            continue;
+        }
+        if let Err(error) = fs::rename(&path, &destination)
+            .or_else(|_| fs::copy(&path, &destination).and_then(|_| fs::remove_file(&path)))
+        {
+            eprintln!("Could not migrate legacy log {}: {error}", path.display());
+        }
+    }
 }
 
 fn install_panic_logging(app: &AppHandle) {
@@ -1076,6 +1118,34 @@ fn log(app: &AppHandle, level: Level, message: impl Into<String>) {
     if let Err(error) = app.emit("log", entry) {
         eprintln!("Could not emit application log entry: {error}");
     }
+}
+
+/// Write a WebView2 diagnostic directly to the current application session file.
+/// This avoids depending on frontend event delivery while the webview is broken.
+#[cfg(windows)]
+pub(crate) fn write_webview_diagnostic(app: &AppHandle, message: &str) {
+    let logger = app.state::<Arc<Logger>>();
+    let mut next_id = logger.next_id.recover("log id lock");
+    let entry = LogEntry {
+        id: *next_id,
+        session: logger.session.clone(),
+        timestamp: timestamp(),
+        level: Level::Error,
+        message: message.to_string(),
+    };
+    *next_id += 1;
+    drop(next_id);
+
+    match serde_json::to_string(&entry) {
+        Ok(line) => {
+            let mut file = logger.file.recover("log file lock");
+            if let Err(error) = writeln!(file, "{line}").and_then(|_| file.flush()) {
+                eprintln!("Could not write WebView2 diagnostic to session log: {error}");
+            }
+        }
+        Err(error) => eprintln!("Could not serialize WebView2 diagnostic: {error}"),
+    }
+    let _ = app.emit("log", entry);
 }
 
 fn read_session(path: &std::path::Path, session: &str) -> Vec<LogEntry> {
