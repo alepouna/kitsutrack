@@ -507,16 +507,23 @@ fn show_logs(app: &AppHandle) {
         return;
     }
     log(app, Level::Info, "Creating logs WebView2 window");
-    let window = match WebviewWindowBuilder::new(app, "logs", WebviewUrl::App("index.html".into()))
+    let mut builder = WebviewWindowBuilder::new(app, "logs", WebviewUrl::App("index.html".into()))
         .title("KitsuTrack Bridge Logs")
         .inner_size(820.0, 540.0)
         .min_inner_size(560.0, 320.0)
         // Keep the window hidden until the native WebView2 failure handler is installed.
         // Showing it during build can expose a WebView2 startup failure before recovery
         // is attached.
-        .visible(false)
-        .build()
-    {
+        .visible(false);
+    if let Some(directory) = webview_data_directory(app) {
+        log(
+            app,
+            Level::Info,
+            format!("Logs WebView2 data directory: {}", directory.display()),
+        );
+        builder = builder.data_directory(directory);
+    }
+    let window = match builder.build() {
         Ok(window) => window,
         Err(error) => {
             log(
@@ -580,8 +587,12 @@ fn show_menu(app: &AppHandle) {
             return;
         }
     };
-    let builder = match WebviewWindowBuilder::new(app, "menu", WebviewUrl::App("menu.html".into()))
-        .icon(icon)
+    let mut builder = match WebviewWindowBuilder::new(
+        app,
+        "menu",
+        WebviewUrl::App("menu.html".into()),
+    )
+    .icon(icon)
     {
         Ok(builder) => builder,
         Err(error) => {
@@ -593,6 +604,14 @@ fn show_menu(app: &AppHandle) {
             return;
         }
     };
+    if let Some(directory) = webview_data_directory(app) {
+        log(
+            app,
+            Level::Info,
+            format!("Menu WebView2 data directory: {}", directory.display()),
+        );
+        builder = builder.data_directory(directory);
+    }
     match builder
         .title("KitsuTrack Bridge")
         .inner_size(360.0, 360.0)
@@ -618,6 +637,15 @@ fn show_menu(app: &AppHandle) {
             format!("Could not show tray menu window: {error}"),
         ),
     }
+}
+
+fn webview_data_directory(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .resolve(
+            format!("{DATA_DIRECTORY}/WebView2"),
+            BaseDirectory::LocalData,
+        )
+        .ok()
 }
 
 fn app_icon() -> tauri::Result<tauri::image::Image<'static>> {
