@@ -612,6 +612,12 @@ fn show_menu(app: &AppHandle) {
         );
         builder = builder.data_directory(directory);
     }
+    #[cfg(windows)]
+    {
+        // Transparent, undecorated windows can become click-through after a
+        // WebView2 restart on Windows. Keep the tray UI opaque and interactive.
+        builder = builder.transparent(false);
+    }
     match builder
         .title("KitsuTrack Bridge")
         .inner_size(360.0, 360.0)
@@ -626,6 +632,8 @@ fn show_menu(app: &AppHandle) {
         .and_then(|window| {
             #[cfg(windows)]
             windows_webview::install_process_failed_recovery(&window);
+            #[cfg(windows)]
+            window.set_ignore_cursor_events(false)?;
             window.move_window_constrained(Position::TrayCenter)?;
             window.show()?;
             window.set_focus()
