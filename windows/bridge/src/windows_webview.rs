@@ -29,6 +29,11 @@ pub fn install_process_failed_recovery(window: &WebviewWindow) {
     let result_label = label.clone();
     let result_app = app.clone();
     let result = window.with_webview(move |platform| {
+        super::log(
+            &app,
+            super::Level::Info,
+            format!("WebView2 {label}: native webview initialization started"),
+        );
         let webview = match unsafe { platform.controller().CoreWebView2() } {
             Ok(webview) => webview,
             Err(error) => {
@@ -77,6 +82,12 @@ pub fn install_process_failed_recovery(window: &WebviewWindow) {
                 &app,
                 &format!("WebView2 {label}: unable to install ProcessFailed handler: {error}"),
             );
+        } else {
+            super::log(
+                &app,
+                super::Level::Info,
+                format!("WebView2 {label}: ProcessFailed handler installed (token {token})"),
+            );
         }
     });
 
@@ -89,6 +100,11 @@ pub fn install_process_failed_recovery(window: &WebviewWindow) {
 }
 
 fn recreate_window(app: &tauri::AppHandle, label: &str) {
+    super::log(
+        app,
+        super::Level::Warning,
+        format!("WebView2 {label}: recovery started"),
+    );
     let app = app.clone();
     let label = label.to_string();
     let main_app = app.clone();
@@ -111,6 +127,11 @@ fn recreate_window(app: &tauri::AppHandle, label: &str) {
         );
         return;
     }
+    super::log(
+        &app,
+        super::Level::Info,
+        format!("WebView2 {label}: close scheduled for failed window"),
+    );
 
     let retry_app = app.clone();
     let recreated = Arc::new(AtomicBool::new(false));
@@ -144,6 +165,13 @@ fn recreate_window(app: &tauri::AppHandle, label: &str) {
                     ),
                 }
                 if recovery_app.get_webview_window(&recovery_label).is_some() {
+                    super::log(
+                        &recovery_app,
+                        super::Level::Info,
+                        format!(
+                            "WebView2 {recovery_label}: recovery recreated window on attempt {attempt}"
+                        ),
+                    );
                     recreated_for_main.store(true, Ordering::Release);
                 }
             }) {

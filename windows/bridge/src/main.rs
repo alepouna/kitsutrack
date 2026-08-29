@@ -17,7 +17,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
     path::BaseDirectory,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
@@ -494,6 +494,7 @@ fn stop_helper(app: &AppHandle) {
 }
 
 fn show_logs(app: &AppHandle) {
+    log(app, Level::Info, "Logs window requested");
     if let Some(window) = app.get_webview_window("logs") {
         if let Err(error) = window.show().and_then(|_| window.set_focus()) {
             log(
@@ -502,8 +503,10 @@ fn show_logs(app: &AppHandle) {
                 format!("Could not show logs window: {error}"),
             );
         }
+        log(app, Level::Info, "Existing logs window shown");
         return;
     }
+    log(app, Level::Info, "Creating logs WebView2 window");
     let window = match WebviewWindowBuilder::new(app, "logs", WebviewUrl::App("index.html".into()))
         .title("KitsuTrack Bridge Logs")
         .inner_size(820.0, 540.0)
@@ -520,6 +523,21 @@ fn show_logs(app: &AppHandle) {
             return;
         }
     };
+
+    let event_app = app.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::CloseRequested { .. } => {
+            log(&event_app, Level::Info, "Logs window close requested")
+        }
+        WindowEvent::Destroyed => log(&event_app, Level::Warning, "Logs window destroyed"),
+        WindowEvent::Focused(focused) => log(
+            &event_app,
+            Level::Info,
+            format!("Logs window focus changed: {focused}"),
+        ),
+        _ => {}
+    });
+    log(app, Level::Info, "Logs WebView2 window created");
 
     #[cfg(windows)]
     windows_webview::install_process_failed_recovery(&window);
