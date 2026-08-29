@@ -511,6 +511,10 @@ fn show_logs(app: &AppHandle) {
         .title("KitsuTrack Bridge Logs")
         .inner_size(820.0, 540.0)
         .min_inner_size(560.0, 320.0)
+        // Keep the window hidden until the native WebView2 failure handler is installed.
+        // Showing it during build can expose a WebView2 startup failure before recovery
+        // is attached.
+        .visible(false)
         .build()
     {
         Ok(window) => window,
@@ -541,6 +545,15 @@ fn show_logs(app: &AppHandle) {
 
     #[cfg(windows)]
     windows_webview::install_process_failed_recovery(&window);
+    if let Err(error) = window.show().and_then(|_| window.set_focus()) {
+        log(
+            app,
+            Level::Warning,
+            format!("Could not show logs window after WebView2 setup: {error}"),
+        );
+    } else {
+        log(app, Level::Info, "Logs window shown after WebView2 setup");
+    }
     #[cfg(not(windows))]
     let _ = window;
 }
