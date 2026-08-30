@@ -12,7 +12,10 @@ use std::{
     panic::{self, AssertUnwindSafe},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -32,6 +35,7 @@ const ISSUE_URL: &str = "https://github.com/alepouna/kitsutrack/issues/new/choos
 const RELEASE_URL: &str = "https://api.github.com/repos/alepouna/kitsutrack/releases/latest";
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const DATA_DIRECTORY: &str = "KitsuTrack";
+static LOGS_WINDOW_BUILDING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Parser, Clone)]
 #[command(about = "KitsuTrack USB bridge for OpenTrack")]
@@ -506,6 +510,33 @@ fn show_logs(app: &AppHandle) {
         log(app, Level::Info, "Existing logs window shown");
         return;
     }
+
+    if LOGS_WINDOW_BUILDING.swap(true, Ordering::AcqRel) {
+        log(
+            app,
+            Level::Warning,
+            "Logs WebView2 window creation is already in progress",
+        );
+        return;
+    }
+    let app = app.clone();
+    thread::spawn(move || {
+        let result = panic::catch_unwind(AssertUnwindSafe(|| create_logs_window(&app)));
+        if let Err(payload) = result {
+            log(
+                &app,
+                Level::Error,
+                format!(
+                    "Logs WebView2 creation panicked: {}",
+                    panic_message(payload)
+                ),
+            );
+        }
+        LOGS_WINDOW_BUILDING.store(false, Ordering::Release);
+    });
+}
+
+fn create_logs_window(app: &AppHandle) {
     log(app, Level::Info, "Creating logs WebView2 window");
     let mut builder = WebviewWindowBuilder::new(app, "logs", WebviewUrl::App("index.html".into()))
         .title("KitsuTrack Bridge Logs")
