@@ -662,17 +662,24 @@ fn show_menu(app: &AppHandle) {
     }
     match builder
         .title("KitsuTrack Bridge")
-        .inner_size(360.0, 430.0)
+        .inner_size(360.0, 340.0)
         .resizable(false)
-        // Use a normal native frame for the tray window. Frameless popup
-        // windows can render correctly but lose mouse hit-testing on Windows.
-        .decorations(true)
+        .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false)
         .build()
         .map(|window| {
+            #[cfg(windows)]
+            if let Err(error) = windows_webview::configure_menu_popup(&window) {
+                log(
+                    app,
+                    Level::Warning,
+                    format!("Could not configure tray menu popup: {error}"),
+                );
+            }
             let event_app = app.clone();
+            let event_window = window.clone();
             window.on_window_event(move |event| match event {
                 WindowEvent::CloseRequested { .. } => {
                     log(&event_app, Level::Info, "Tray menu close requested")
@@ -680,11 +687,16 @@ fn show_menu(app: &AppHandle) {
                 WindowEvent::Destroyed => {
                     log(&event_app, Level::Warning, "Tray menu window destroyed")
                 }
-                WindowEvent::Focused(focused) => log(
-                    &event_app,
-                    Level::Info,
-                    format!("Tray menu focus changed: {focused}"),
-                ),
+                WindowEvent::Focused(false) => {
+                    if let Err(error) = event_window.hide() {
+                        log(
+                            &event_app,
+                            Level::Warning,
+                            format!("Could not hide tray menu after losing focus: {error}"),
+                        );
+                    }
+                }
+                WindowEvent::Focused(true) => log(&event_app, Level::Info, "Tray menu focused"),
                 _ => {}
             });
             #[cfg(windows)]

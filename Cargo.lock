@@ -1976,6 +1976,7 @@ dependencies = [
  "clap",
  "iht-protocol",
  "open",
+ "raw-window-handle",
  "reqwest",
  "semver",
  "serde",
@@ -1986,6 +1987,7 @@ dependencies = [
  "tauri-plugin-positioner",
  "time",
  "webview2-com",
+ "windows",
  "zip",
 ]
 

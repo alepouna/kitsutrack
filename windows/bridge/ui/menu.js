@@ -2,6 +2,7 @@ const status = document.querySelector('#status');
 const iphone = document.querySelector('#iphone');
 const rate = document.querySelector('#rate');
 const checkUpdates = document.querySelector('#check-updates');
+const logs = document.querySelector('[data-command="open_logs"]');
 const checkUpdatesLabel = checkUpdates.querySelector('span');
 const refreshIcon = document.querySelector('#refresh-icon');
 const downloadIcon = document.querySelector('#download-icon');
@@ -12,6 +13,7 @@ function reportError(error, context = 'Menu UI') {
   status.lastChild.textContent = 'UI error — bridge still running';
   status.className = 'disconnected';
   document.querySelector('#retry').classList.remove('hidden');
+  logs.classList.add('hidden');
   if (invoke && !reportingError) {
     reportingError = true;
     invoke('client_error', { message }).catch(() => {}).finally(() => { reportingError = false; });
@@ -20,6 +22,7 @@ function reportError(error, context = 'Menu UI') {
 
 function render(state) {
   document.querySelector('#retry').classList.add('hidden');
+  logs.classList.remove('hidden');
   const trackingRate = state.trackingRate ?? state.tracking_rate;
   const updateAvailable = state.updateAvailable ?? state.update_available;
   status.lastChild.textContent = state.status;
