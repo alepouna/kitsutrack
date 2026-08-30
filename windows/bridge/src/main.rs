@@ -623,7 +623,6 @@ fn show_menu(app: &AppHandle) {
         .inner_size(360.0, 360.0)
         .resizable(false)
         .decorations(false)
-        .transparent(true)
         .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
