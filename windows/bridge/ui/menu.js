@@ -3,6 +3,8 @@ const iphone = document.querySelector('#iphone');
 const rate = document.querySelector('#rate');
 const checkUpdates = document.querySelector('#check-updates');
 const checkUpdatesLabel = checkUpdates.querySelector('span');
+const refreshIcon = document.querySelector('#refresh-icon');
+const downloadIcon = document.querySelector('#download-icon');
 let invoke, reportingError = false;
 
 function reportError(error, context = 'Menu UI') {
@@ -27,6 +29,8 @@ function render(state) {
   rate.classList.toggle('rate', Boolean(trackingRate));
   checkUpdatesLabel.textContent = updateAvailable ? 'Updates Available' : 'Check for Updates';
   checkUpdates.classList.toggle('updates-available', updateAvailable);
+  refreshIcon.classList.toggle('hidden', updateAvailable);
+  downloadIcon.classList.toggle('hidden', !updateAvailable);
 }
 
 function connect() {

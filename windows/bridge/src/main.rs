@@ -5,6 +5,7 @@ use clap::Parser;
 use iht_protocol::{FLAG_TRACKING, PACKET_SIZE, PosePacket, quaternion_to_degrees};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     env,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -25,6 +26,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::MessageDialogButtons;
 use tauri_plugin_positioner::{Position, WindowExt};
 
 #[cfg(windows)]
@@ -102,6 +104,7 @@ struct Logger {
     session_dir: PathBuf,
     session: String,
     next_id: Mutex<u64>,
+    repeated: Mutex<HashMap<String, (Instant, u32)>>,
 }
 struct StatusItem {
     text: Mutex<String>,
@@ -456,7 +459,11 @@ fn relay_helper_output<R: Read + Send + 'static>(app: AppHandle, output: R, labe
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             for line in BufReader::new(output).lines() {
                 match line {
-                    Ok(line) => log(&app, Level::Info, format!("{label}: {line}")),
+                    Ok(line) => log(
+                        &app,
+                        Level::Info,
+                        format!("{label}: {}", normalize_helper_output(&line)),
+                    ),
                     Err(error) => {
                         log(
                             &app,
@@ -765,13 +772,26 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 use std::os::windows::process::CommandExt;
 
 fn show_about(app: &AppHandle) {
+    let app = app.clone();
     app.dialog()
         .message(format!(
             "KitsuTrack Bridge {}\n\n{REPOSITORY_URL}",
             env!("CARGO_PKG_VERSION")
         ))
         .title("About KitsuTrack")
-        .show(|_| {});
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Open GitHub".into(),
+            "Close".into(),
+        ))
+        .show(move |open_github| {
+            if open_github && let Err(error) = open::that(REPOSITORY_URL) {
+                log(
+                    &app,
+                    Level::Warning,
+                    format!("Could not open GitHub repository: {error}"),
+                );
+            }
+        });
 }
 
 fn check_updates(app: AppHandle, manual: bool) {
@@ -1203,6 +1223,7 @@ fn create_logger(app: &AppHandle, _args: &Args) -> Result<Logger> {
         session_dir,
         session,
         next_id: Mutex::new(1),
+        repeated: Mutex::new(HashMap::new()),
     })
 }
 
@@ -1261,7 +1282,20 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 
 fn log(app: &AppHandle, level: Level, message: impl Into<String>) {
     let logger = app.state::<Arc<Logger>>();
-    let message = message.into();
+    let mut message = message.into();
+    let key = message.clone();
+    let mut repeated = logger.repeated.recover("repeated log lock");
+    if let Some((last, count)) = repeated.get_mut(&key) {
+        if last.elapsed() < Duration::from_secs(30) {
+            *count += 1;
+            return;
+        }
+        if *count > 0 {
+            message = format!("{message} ({} repeats suppressed)", *count);
+        }
+    }
+    repeated.insert(key, (Instant::now(), 0));
+    drop(repeated);
     let mut next_id = logger.next_id.recover("log id lock");
     let entry = LogEntry {
         id: *next_id,
@@ -1285,6 +1319,16 @@ fn log(app: &AppHandle, level: Level, message: impl Into<String>) {
     if let Err(error) = app.emit("log", entry) {
         eprintln!("Could not emit application log entry: {error}");
     }
+}
+
+fn normalize_helper_output(line: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return line.to_string();
+    };
+    if let Some(object) = value.as_object_mut() {
+        object.remove("time");
+    }
+    serde_json::to_string(&value).unwrap_or_else(|_| line.to_string())
 }
 
 /// Write a WebView2 diagnostic directly to the current application session file.
