@@ -28,6 +28,7 @@ function render(state) {
   rate.textContent = trackingRate ? `${trackingRate} FPS` : 'Not connected';
   rate.classList.toggle('rate', Boolean(trackingRate));
   checkUpdatesLabel.textContent = updateAvailable ? 'Updates Available' : 'Check for Updates';
+  checkUpdates.dataset.command = updateAvailable ? 'open_update_command' : 'check_for_updates';
   checkUpdates.classList.toggle('updates-available', updateAvailable);
   refreshIcon.classList.toggle('hidden', updateAvailable);
   downloadIcon.classList.toggle('hidden', !updateAvailable);

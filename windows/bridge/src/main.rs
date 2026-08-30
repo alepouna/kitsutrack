@@ -968,6 +968,7 @@ fn check_for_updates(app: AppHandle) {
 
 #[tauri::command]
 fn open_update_command(app: AppHandle) {
+    hide_menu(&app);
     open_update(&app);
 }
 

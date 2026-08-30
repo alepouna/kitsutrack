@@ -1,7 +1,7 @@
 const $ = selector => document.querySelector(selector);
 let invoke, files = [], entries = [], currentSession = null, selectedLevel = 'all', reportingError = false;
 const formatDate = value => { const date = new Date(Number(value) || value); return Number.isNaN(date.valueOf()) ? value : date.toLocaleString(); };
-const formatSize = bytes => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+const formatSize = bytes => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }
 function reportError(error, context = 'Logs UI') {
   const message = `${context}: ${errorMessage(error)}`;
@@ -36,6 +36,9 @@ function renderFiles() {
   showEmpty(files.length === 0);
 }
 async function openFile(session) {
+  const file = files.find(item => item.session === session);
+  if (file && file.size > 800 * 1024 && !window.confirm('Opening this log file may take a moment, and the log viewer may be unresponsive. Continue?')) return;
+  $('#summary').textContent = 'Opening log…';
   try {
     currentSession = session; entries = await call('log_file', { session });
   } catch (_) { return; }
