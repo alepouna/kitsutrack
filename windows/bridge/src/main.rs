@@ -568,12 +568,16 @@ fn show_logs(app: &AppHandle) {
 fn show_menu(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("menu") {
         if window.is_visible().unwrap_or(false) {
-            let _ = window.hide();
+            if let Err(error) = window.hide() {
+                log(
+                    app,
+                    Level::Warning,
+                    format!("Could not hide tray menu: {error}"),
+                );
+            }
             return;
         }
-        let _ = window.show();
-        let _ = window.set_focus();
-        let _ = window.move_window_constrained(Position::TrayCenter);
+        show_menu_window(app, &window);
         return;
     }
     let icon = match app_icon() {
@@ -620,7 +624,7 @@ fn show_menu(app: &AppHandle) {
     }
     match builder
         .title("KitsuTrack Bridge")
-        .inner_size(360.0, 360.0)
+        .inner_size(360.0, 430.0)
         .resizable(false)
         .decorations(false)
         .shadow(false)
@@ -628,14 +632,25 @@ fn show_menu(app: &AppHandle) {
         .skip_taskbar(true)
         .visible(false)
         .build()
-        .and_then(|window| {
+        .map(|window| {
+            let event_app = app.clone();
+            window.on_window_event(move |event| match event {
+                WindowEvent::CloseRequested { .. } => {
+                    log(&event_app, Level::Info, "Tray menu close requested")
+                }
+                WindowEvent::Destroyed => {
+                    log(&event_app, Level::Warning, "Tray menu window destroyed")
+                }
+                WindowEvent::Focused(focused) => log(
+                    &event_app,
+                    Level::Info,
+                    format!("Tray menu focus changed: {focused}"),
+                ),
+                _ => {}
+            });
             #[cfg(windows)]
             windows_webview::install_process_failed_recovery(&window);
-            #[cfg(windows)]
-            window.set_ignore_cursor_events(false)?;
-            window.move_window_constrained(Position::TrayCenter)?;
-            window.show()?;
-            window.set_focus()
+            show_menu_window(app, &window);
         }) {
         Ok(()) => {}
         Err(error) => log(
@@ -643,6 +658,45 @@ fn show_menu(app: &AppHandle) {
             Level::Warning,
             format!("Could not show tray menu window: {error}"),
         ),
+    }
+}
+
+fn show_menu_window(app: &AppHandle, window: &tauri::WebviewWindow) {
+    #[cfg(windows)]
+    if let Err(error) = window.set_ignore_cursor_events(false) {
+        log(
+            app,
+            Level::Warning,
+            format!("Could not enable tray menu mouse input: {error}"),
+        );
+    }
+    if let Err(error) = window.set_enabled(true) {
+        log(
+            app,
+            Level::Warning,
+            format!("Could not enable tray menu window: {error}"),
+        );
+    }
+    if let Err(error) = window.move_window_constrained(Position::TrayCenter) {
+        log(
+            app,
+            Level::Warning,
+            format!("Could not position tray menu: {error}"),
+        );
+    }
+    if let Err(error) = window.show() {
+        log(
+            app,
+            Level::Warning,
+            format!("Could not show tray menu: {error}"),
+        );
+    }
+    if let Err(error) = window.set_focus() {
+        log(
+            app,
+            Level::Warning,
+            format!("Could not focus tray menu: {error}"),
+        );
     }
 }
 
