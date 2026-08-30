@@ -626,8 +626,9 @@ fn show_menu(app: &AppHandle) {
         .title("KitsuTrack Bridge")
         .inner_size(360.0, 430.0)
         .resizable(false)
-        .decorations(false)
-        .shadow(false)
+        // Use a normal native frame for the tray window. Frameless popup
+        // windows can render correctly but lose mouse hit-testing on Windows.
+        .decorations(true)
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false)
