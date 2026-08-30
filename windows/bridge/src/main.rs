@@ -732,6 +732,18 @@ fn show_menu_window(app: &AppHandle, window: &tauri::WebviewWindow) {
     }
 }
 
+fn hide_menu(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("menu")
+        && let Err(error) = window.hide()
+    {
+        log(
+            app,
+            Level::Warning,
+            format!("Could not close tray menu: {error}"),
+        );
+    }
+}
+
 fn webview_data_directory(app: &AppHandle) -> Option<PathBuf> {
     app.path()
         .resolve(
@@ -904,6 +916,7 @@ fn menu_state(app: AppHandle) -> MenuState {
 
 #[tauri::command]
 fn open_logs(app: AppHandle) {
+    hide_menu(&app);
     show_logs(&app);
 }
 
@@ -918,11 +931,13 @@ fn client_error(app: AppHandle, message: String) {
 
 #[tauri::command]
 fn open_about(app: AppHandle) {
+    hide_menu(&app);
     show_about(&app);
 }
 
 #[tauri::command]
-fn report_feedback() {
+fn report_feedback(app: AppHandle) {
+    hide_menu(&app);
     let _ = open::that(ISSUE_URL);
 }
 

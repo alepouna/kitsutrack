@@ -1,7 +1,8 @@
 const status = document.querySelector('#status');
 const iphone = document.querySelector('#iphone');
 const rate = document.querySelector('#rate');
-const update = document.querySelector('#update');
+const checkUpdates = document.querySelector('#check-updates');
+const checkUpdatesLabel = checkUpdates.querySelector('span');
 let invoke, reportingError = false;
 
 function reportError(error, context = 'Menu UI') {
@@ -22,9 +23,10 @@ function render(state) {
   status.lastChild.textContent = state.status;
   status.className = state.status.includes('Tracking') && !state.status.includes('Waiting') ? '' : state.status.includes('Waiting') ? 'waiting' : 'disconnected';
   iphone.textContent = state.status === 'Disconnected' ? 'Not connected' : state.iphone;
-  rate.textContent = trackingRate ? `${trackingRate} FPS` : '—';
+  rate.textContent = trackingRate ? `${trackingRate} FPS` : 'Not connected';
   rate.classList.toggle('rate', Boolean(trackingRate));
-  update.classList.toggle('hidden', !updateAvailable);
+  checkUpdatesLabel.textContent = updateAvailable ? 'Updates Available' : 'Check for Updates';
+  checkUpdates.classList.toggle('updates-available', updateAvailable);
 }
 
 function connect() {

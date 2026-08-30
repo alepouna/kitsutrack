@@ -9,4 +9,6 @@ p.waiting { color: #f0b35f; } p.disconnected { color: #b8bdba; }
 .details { padding: 11px 20px; border-bottom: 1px solid #32363a; }
 .details div { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 13px; color: #b6bbb6; }
 .details strong { color: #edf0ec; font-weight: 600; }.details strong.rate { color: #55dc9a; }
+.updates-available { color: #55dc9a; }
+.updates-available svg { stroke: currentColor; }
 nav { padding: 6px; } button { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; border-radius: 7px; background: transparent; color: #e6e9e5; cursor: pointer; padding: 8px 11px; font: inherit; font-size: 13px; text-align: left; }button:hover,button:focus-visible { outline: none; background: #2a2e32; }svg { width: 16px; height: 16px; fill: none; stroke: #abb1ab; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; overflow: visible; }.github { fill: #abb1ab; stroke: none; }footer { padding: 6px; border-top: 1px solid #32363a; }.quit { color: #f2aaa1; }.quit svg { stroke: currentColor; }.quit:hover { background: #4a2928; }.hidden { display: none; }
