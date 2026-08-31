@@ -15,8 +15,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.alepouna.kitsutrack
         PRODUCT_NAME: KitsuTrack
-        MARKETING_VERSION: "0.0.0"
-        CURRENT_PROJECT_VERSION: "0"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "2"
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_NSCameraUsageDescription: "TrueDepth face tracking provides head pose to your simulator."

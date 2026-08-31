@@ -1,12 +1,41 @@
-:root { color-scheme: dark; font-family: "Segoe UI Variable", "Segoe UI", sans-serif; background: transparent; color: #edf0ec; }
-body { margin: 0; padding: 6px; background: transparent; overflow: hidden; }
-main { overflow: hidden; background: #1b1d20; border: 1px solid #393d42; border-radius: 14px; }
-header { padding: 18px 20px 16px; border-bottom: 1px solid #32363a; }
-h1 { margin: 0 0 12px; font-size: 18px; line-height: 1; font-weight: 650; letter-spacing: -.01em; }
-p { display: flex; align-items: center; gap: 9px; margin: 0; font-size: 13px; font-weight: 600; color: #55dc9a; }
-p i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 15%, transparent); }
-p.waiting { color: #f0b35f; } p.disconnected { color: #b8bdba; }
-.details { padding: 11px 20px; border-bottom: 1px solid #32363a; }
-.details div { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 13px; color: #b6bbb6; }
-.details strong { color: #edf0ec; font-weight: 600; }.details strong.rate { color: #55dc9a; }
-nav { padding: 6px; } button { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; border-radius: 7px; background: transparent; color: #e6e9e5; cursor: pointer; padding: 8px 11px; font: inherit; font-size: 13px; text-align: left; }button:hover,button:focus-visible { outline: none; background: #2a2e32; }svg { width: 16px; height: 16px; fill: none; stroke: #abb1ab; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; overflow: visible; }.github { fill: #abb1ab; stroke: none; }footer { padding: 6px; border-top: 1px solid #32363a; }.quit { color: #f2aaa1; }.quit svg { stroke: currentColor; }.quit:hover { background: #4a2928; }.hidden { display: none; }
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
+  background: #191b1e;
+  color: #edf0ec;
+}
+
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; }
+body { margin: 0; overflow: hidden; background: #191b1e; }
+main { min-height: 100%; overflow: hidden; background: #1d2023; border: 1px solid #34393d; border-radius: 12px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 16px 13px; }
+h1 { margin: 0; font-size: 15px; line-height: 1.2; font-weight: 680; letter-spacing: -.01em; }
+#status { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; margin: 0; color: #b8bfba; font-size: 11px; font-weight: 600; white-space: nowrap; }
+#status i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent); }
+#status.waiting { color: #e1ab5d; }
+#status.connected { color: #5dd69a; }
+
+.connection { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 12px; padding: 11px 12px; border: 1px solid #30353a; border-radius: 9px; background: #191b1e; }
+.device { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.device > svg { width: 18px; height: 18px; color: #aeb6af; }
+.device div, .metric { display: grid; gap: 2px; }
+.connection span { color: #929a93; font-size: 11px; line-height: 1.2; }
+.connection strong { color: #e8ebe7; font-size: 12px; line-height: 1.25; font-weight: 650; }
+.metric { min-width: 74px; padding-left: 13px; border-left: 1px solid #30353a; text-align: right; }
+.metric strong { color: #afb6b0; }
+.metric strong.rate { color: #5dd69a; }
+
+nav { padding: 9px 7px 6px; }
+button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 30px; padding: 6px 9px; border: 0; border-radius: 7px; background: transparent; color: #dce0dc; cursor: pointer; font: inherit; font-size: 12px; font-weight: 540; text-align: left; }
+button:hover, button:focus-visible { outline: none; background: #2a2f33; color: #f5f7f4; }
+button:focus-visible { box-shadow: inset 0 0 0 1px #6aa68a; }
+svg { width: 15px; height: 15px; flex: 0 0 auto; overflow: visible; fill: none; stroke: #9ca59e; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.github { fill: #9ca59e; stroke: none; }
+.updates-available { color: #6be1a4; }
+.updates-available svg { stroke: currentColor; }
+footer { margin: 0 7px; padding: 5px 0 7px; border-top: 1px solid #2d3135; }
+.quit { color: #e8a59e; }
+.quit svg { stroke: currentColor; }
+.quit:hover, .quit:focus-visible { background: #422a2a; color: #f5b4ad; }
+.hidden { display: none; }
