@@ -37,6 +37,7 @@ const ISSUE_URL: &str = "https://github.com/alepouna/kitsutrack/issues/new/choos
 const RELEASE_URL: &str = "https://api.github.com/repos/alepouna/kitsutrack/releases/latest";
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const DATA_DIRECTORY: &str = "KitsuTrack";
+const MENU_FOCUS_LOSS_SETTLE_DELAY: Duration = Duration::from_millis(150);
 static LOGS_WINDOW_BUILDING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Parser, Clone)]
@@ -679,7 +680,6 @@ fn show_menu(app: &AppHandle) {
                 );
             }
             let event_app = app.clone();
-            let event_window = window.clone();
             let popup_has_been_focused = Arc::new(AtomicBool::new(false));
             let event_popup_has_been_focused = popup_has_been_focused.clone();
             window.on_window_event(move |event| match event {
@@ -689,18 +689,29 @@ fn show_menu(app: &AppHandle) {
                 WindowEvent::Destroyed => {
                     log(&event_app, Level::Warning, "Tray menu window destroyed")
                 }
-                WindowEvent::Focused(false)
-                    if should_hide_menu_on_focus_loss(
-                        event_popup_has_been_focused.load(Ordering::Acquire),
-                    ) =>
-                {
-                    if let Err(error) = event_window.hide() {
-                        log(
-                            &event_app,
-                            Level::Warning,
-                            format!("Could not hide tray menu after losing focus: {error}"),
-                        );
-                    }
+                WindowEvent::Focused(false) => {
+                    let app = event_app.clone();
+                    let has_been_focused = event_popup_has_been_focused.load(Ordering::Acquire);
+                    thread::spawn(move || {
+                        thread::sleep(MENU_FOCUS_LOSS_SETTLE_DELAY);
+                        let Some(window) = app.get_webview_window("menu") else {
+                            return;
+                        };
+                        let is_visible = window.is_visible().unwrap_or(false);
+                        let is_focused = window.is_focused().unwrap_or(false);
+                        if should_hide_menu_after_focus_loss(
+                            has_been_focused,
+                            is_visible,
+                            is_focused,
+                        ) && let Err(error) = window.hide()
+                        {
+                            log(
+                                &app,
+                                Level::Warning,
+                                format!("Could not hide tray menu after losing focus: {error}"),
+                            );
+                        }
+                    });
                 }
                 WindowEvent::Focused(true) => {
                     event_popup_has_been_focused.store(true, Ordering::Release);
@@ -721,8 +732,12 @@ fn show_menu(app: &AppHandle) {
     }
 }
 
-fn should_hide_menu_on_focus_loss(has_been_focused: bool) -> bool {
-    has_been_focused
+fn should_hide_menu_after_focus_loss(
+    has_been_focused: bool,
+    is_visible: bool,
+    is_focused: bool,
+) -> bool {
+    has_been_focused && is_visible && !is_focused
 }
 
 fn show_menu_window(app: &AppHandle, window: &tauri::WebviewWindow) {
@@ -1499,11 +1514,13 @@ fn find_usb_tool() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::should_hide_menu_on_focus_loss;
+    use super::should_hide_menu_after_focus_loss;
 
     #[test]
-    fn ignores_focus_loss_until_the_popup_has_received_focus() {
-        assert!(!should_hide_menu_on_focus_loss(false));
-        assert!(should_hide_menu_on_focus_loss(true));
+    fn hides_only_after_a_settled_focus_loss() {
+        assert!(!should_hide_menu_after_focus_loss(false, true, false));
+        assert!(!should_hide_menu_after_focus_loss(true, false, false));
+        assert!(!should_hide_menu_after_focus_loss(true, true, true));
+        assert!(should_hide_menu_after_focus_loss(true, true, false));
     }
 }
