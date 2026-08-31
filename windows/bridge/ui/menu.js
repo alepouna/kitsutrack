@@ -10,7 +10,7 @@ let invoke, reportingError = false;
 
 function reportError(error, context = 'Menu UI') {
   const message = `${context}: ${error instanceof Error ? error.message : String(error)}`;
-  status.lastChild.textContent = 'UI error — bridge still running';
+  status.querySelector('span').textContent = 'Bridge UI error';
   status.className = 'disconnected';
   document.querySelector('#retry').classList.remove('hidden');
   logs.classList.add('hidden');
@@ -25,10 +25,12 @@ function render(state) {
   logs.classList.remove('hidden');
   const trackingRate = state.trackingRate ?? state.tracking_rate;
   const updateAvailable = state.updateAvailable ?? state.update_available;
-  status.lastChild.textContent = state.status;
-  status.className = state.status.includes('Tracking') && !state.status.includes('Waiting') ? '' : state.status.includes('Waiting') ? 'waiting' : 'disconnected';
+  const isTracking = state.status.includes('Tracking') && !state.status.includes('Waiting');
+  const isWaiting = state.status.includes('Waiting');
+  status.querySelector('span').textContent = isTracking ? 'iPhone tracking' : isWaiting ? 'Waiting for iPhone' : 'iPhone not connected';
+  status.className = isTracking ? 'connected' : isWaiting ? 'waiting' : 'disconnected';
   iphone.textContent = state.status === 'Disconnected' ? 'Not connected' : state.iphone;
-  rate.textContent = trackingRate ? `${trackingRate} FPS` : 'Not connected';
+  rate.textContent = trackingRate ? `${trackingRate} FPS` : '—';
   rate.classList.toggle('rate', Boolean(trackingRate));
   checkUpdatesLabel.textContent = updateAvailable ? 'Updates Available' : 'Check for Updates';
   checkUpdates.dataset.command = updateAvailable ? 'open_update_command' : 'check_for_updates';

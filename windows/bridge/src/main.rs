@@ -662,7 +662,7 @@ fn show_menu(app: &AppHandle) {
     }
     match builder
         .title("KitsuTrack Bridge")
-        .inner_size(360.0, 340.0)
+        .inner_size(360.0, 280.0)
         .resizable(false)
         .decorations(false)
         .always_on_top(true)
