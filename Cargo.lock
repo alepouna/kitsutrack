@@ -1677,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "iht-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crc32fast",
 ]
@@ -1970,7 +1970,7 @@ dependencies = [
 
 [[package]]
 name = "kitsutrack-bridge"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4272,7 +4272,7 @@ dependencies = [
 
 [[package]]
 name = "tracker-sim"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
